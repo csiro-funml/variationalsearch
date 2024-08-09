@@ -30,6 +30,11 @@ models/aav_cnn_oracle.pt filter=lfs diff=lfs merge=lfs -text
 models/gfp_cnn_oracle.pt filter=lfs diff=lfs merge=lfs -text
 data/TRPB/four-site_simplified_AA_data.csv filter=lfs diff=lfs merge=lfs -text
 data/TRPB/surrogate_training_data.csv filter=lfs diff=lfs merge=lfs -text
+data/TRPB/FL_surrogate_training_data.csv filter=lfs diff=lfs merge=lfs -text
+models/GFP_FL_surrogate.pt filter=lfs diff=lfs merge=lfs -text
+models/DHFR_FL_surrogate_nn.pt filter=lfs diff=lfs merge=lfs -text
+models/TRPB_FL_surrogate_nn.pt filter=lfs diff=lfs merge=lfs -text
+models/TRPB_surrogate_nn.pt filter=lfs diff=lfs merge=lfs -text
 *.gitignore filter=lfs diff=lfs merge=lfs -text
 *.md filter=lfs diff=lfs merge=lfs -text
 *.csv filter=lfs diff=lfs merge=lfs -text
