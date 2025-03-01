@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools >= 61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vsd"
+version = "0.9"
+description = "Variational search distributions"
+authors = [
+  {name = "Dan Steinberg", email = "dan.steinberg@data61.csiro.au"},
+]
+maintainers = [
+  {name = "Dan Steinberg", email = "dan.steinberg@data61.csiro.au"},
+]
+readme = "README.md"
+license = {file = "LICENSE.txt"}
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "torch>=2.1.0",
+    "botorch>=0.11",
+    "polyleven",
+]
+
+[project.optional-dependencies]
+experiments = [
+    "click",
+    "pandas",
+    "scikit-learn",
+    "matplotlib",
+    "notebook",
+    "seaborn",
+    "torchvision"
+]
+poli = [
+    "poli-baselines[lambo2,ehrlich]@git+ssh://git@github.com/MachineLearningLifeScience/poli-baselines.git",
+    "fastapi",
+    "pymoo",
+    "pytorch-holo"
+]
+
+[tool.setuptools]
+packages = ["vsd", "experiments", "experiments.scripts"]
+
+[project.scripts]
+batch_rounds = "experiments.scripts.batch_rounds:run_experiment"
+train_cpe = "experiments.scripts.train_cpe:train_surrogate"
+train_gp = "experiments.scripts.train_gp:train_surrogate"
+train_prior = "experiments.scripts.train_prior:train_prior"
+plot_results = "experiments.scripts.plot_results:plot_results"
+digits = "experiments.scripts.digits:digits"
+ehrlich = "experiments.scripts.ehrlich:ehrlich"
+plot_ehrlich = "experiments.scripts.plot_ehrlich:plot_results"
