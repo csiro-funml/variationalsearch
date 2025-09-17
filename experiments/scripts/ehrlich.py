@@ -32,20 +32,35 @@ from vsd.proposals import (
     LSTMProposal,
     MultiCategoricalProposal,
 )
-from vsd.solvers import CbASSolver, VSDSolver
-from vsd.surrogates import CNNClassProbability, EnsembleProbabilityModel
-from vsd.thresholds import BudgetAnnealedThreshold
+from vsd.solvers import CbASSolver, VSDSolverIW
+from vsd.cpe import CNNClassProbability
+from vsd.labellers import BudgetAnnealedThreshold
 
 SEQLEN_SETTING = {
     15: dict(motif_length=4, n_motifs=2, quantization=4),
     32: dict(motif_length=4, n_motifs=2, quantization=4),
     64: dict(motif_length=4, n_motifs=8, quantization=4),
-    256: dict(motif_length=10, n_motifs=16, quantization=10),
+    256: dict(motif_length=6, n_motifs=10, quantization=6),
 }
-KERNEL_WIDTHS = {15: 4, 32: 7, 64: 7, 256: 13}  # For the CNNs
-LNETWORKS = {15: 32, 32: 32, 64: 64, 256: 128}
-DNETWORKS = {15: 32, 32: 64, 64: 128, 256: 256}
-NHEADS = {15: 1, 32: 2, 64: 4, 256: 6}
+EMBEDDING_DIM = 64
+LNETWORKS = 64
+LLAYERS = 3
+DNETWORKS = 128
+NHEADS = 4
+DLAYERS = 2
+PRIOR_VAL_PROB = 0
+PRIOR_MAXITER = 601
+PRIOR_DROPOUT = {15: 0.5, 32: 0.4, 64: 0.3}
+CPE_PARAMS = dict(
+    ckernel=5,
+    xkernel=3,
+    xstride=2,
+    cfilter_size=64,
+    linear_size=128,
+    embedding_dim=16,
+    dropoutp=0.2,
+    pos_encoding=True,
+)
 
 
 # Code from https://github.com/MachineLearningLifeScience/poli-baselines/blob/
@@ -116,7 +131,7 @@ def plot_all_y(obs: SimpleObserver, ax: plt.Axes, start_from: int = 0):
     help="sequence length for the Ehrlich function.",
 )
 @click.option(
-    "--max-iter", type=int, default=5, help="Maximum iterations to run."
+    "--max-iter", type=int, default=40, help="Maximum iterations to run."
 )
 @click.option(
     "--bsize",
@@ -139,9 +154,7 @@ def plot_all_y(obs: SimpleObserver, ax: plt.Axes, start_from: int = 0):
     is_flag=True,
     help="use the poli-inbuilt ehrlich function implementation.",
 )
-def ehrlich(
-    solver, sequence_length, max_iter, bsize, logdir, device, seed, poli
-):
+def main(solver, sequence_length, max_iter, bsize, logdir, device, seed, poli):
     # Setup logging
     logdir = Path(logdir) / sequence_length
     logdir.mkdir(exist_ok=True, parents=True)
@@ -188,42 +201,29 @@ def ehrlich(
     ):
         alpha_len = len(black_box.alphabet)
         threshold = BudgetAnnealedThreshold(p0=0.5, pT=0.99, T=max_iter)
-        cpe = EnsembleProbabilityModel(
-            base_class=CNNClassProbability,
-            init_kwargs=dict(
-                seq_len=sequence_length,
-                alpha_len=alpha_len,
-                ckernel=KERNEL_WIDTHS[sequence_length],
-                xkernel=2,
-                xstride=2,
-                cfilter_size=16,
-                linear_size=128,
-                embedding_dim=10,
-                dropoutp=0.2,
-                pos_encoding=True,
-            ),
-            ensemble_size=10,
+        cpe = CNNClassProbability(
+            seq_len=sequence_length, alpha_len=alpha_len, **CPE_PARAMS
         )
-
-        # Data augmentation for prior fitting
-        augmenter = TransitionAugmenter(max_mutations=5)
-        prior_options = dict(augmenter=augmenter, augmentation_p=0.2)
 
         if "lstm" in solver:
             vdistribution = LSTMProposal(
                 d_features=sequence_length,
                 k_categories=alpha_len,
-                num_layers=3,
-                hidden_size=LNETWORKS[sequence_length],
+                embedding_dim=EMBEDDING_DIM,
+                num_layers=LLAYERS,
+                hidden_size=LNETWORKS,
+                dropout=PRIOR_DROPOUT[sequence_length],
                 clip_gradients=1.0,
             )
         elif "tfm" in solver:
             vdistribution = DTransformerProposal(
                 d_features=sequence_length,
                 k_categories=alpha_len,
-                nhead=NHEADS[sequence_length],
-                num_layers=2,
-                dim_feedforward=DNETWORKS[sequence_length],
+                embedding_dim=EMBEDDING_DIM,
+                nhead=NHEADS,
+                num_layers=DLAYERS,
+                dim_feedforward=DNETWORKS,
+                dropout=PRIOR_DROPOUT[sequence_length],
                 clip_gradients=1.0,
             )
         else:
@@ -235,24 +235,28 @@ def ehrlich(
         if "cbas" in solver:
             solverclass = CbASSolver
         else:
-            solverclass = VSDSolver
+            solverclass = VSDSolverIW
 
         # lstm or tfm with score function gradients require a lower lr
         vdist_options = None
         if solver in ("vsd-tfm", "vsd-lstm"):
             vdist_options = dict(optimizer_options=dict(lr=1e-4))
+        prior_options = dict(stop_options=dict(maxiter=PRIOR_MAXITER))
 
         optim = solverclass(
             black_box=black_box,
             x0=x0,
             y0=y0,
-            threshold=threshold,
+            alphabet=black_box.alphabet,
+            labeller=threshold,
             cpe=cpe,
             vdistribution=vdistribution,
             device=device,
             seed=seed,
             vdist_options=vdist_options,
             prior_options=prior_options,
+            bsize=bsize,
+            prior_val_prop=PRIOR_VAL_PROB,
         )
         solver_args = dict(seed=seed)
 
@@ -263,7 +267,7 @@ def ehrlich(
             y0=y0,
             overrides=[
                 "max_epochs=2",
-                f"kernel_size={KERNEL_WIDTHS[sequence_length]}",
+                f"kernel_size={5}",
                 f"batch_size={bsize}",
                 f"accelerator={device}",
             ],

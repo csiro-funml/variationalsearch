@@ -39,9 +39,10 @@ from experiments.metrics import (
     precision,
     simple_regret,
 )
-from vsd import surrogates, thresholds
+from vsd import cpe, labellers, surrogates
 from vsd.acquisition import VariationalSearchAcquisition
-from vsd.surrogates import fit_cpe, update_gp
+from vsd.cpe import fit_cpe
+from vsd.surrogates import update_gp
 from vsd.utils import SequenceArray
 
 METHODS = {
@@ -153,9 +154,10 @@ def run_experiment(
     if gp:
         soption = "gp"
         params |= dict(X=X, y=y)
+        surrogate_class = getattr(surrogates, config[soption]["class"])
     else:
         soption = "cpe"
-    surrogate_class = getattr(surrogates, config[soption]["class"])
+        surrogate_class = getattr(cpe, config[soption]["class"])
     surrogate = surrogate_class(**(params | config[soption]["parameters"]))
     surrogate.load_state_dict(
         torch.load(
@@ -168,9 +170,9 @@ def run_experiment(
     log.info(f"Using {surrogate_class} as the predictor.")
 
     # Get fitness threshold
-    thresh_class = getattr(thresholds, config["threshold"]["class"])
-    thresh = thresh_class(**config["threshold"]["args"])
-    best_f = thresh(y)
+    thresh_class = getattr(labellers, config["threshold"]["class"])
+    thresh = thresh_class(**config["threshold"]["args"], update_on_call=False)
+    best_f = thresh.update(y)
 
     # Call signature mapping for metrics, options:
     #   Sc: sequence candidates, SequenceArray
@@ -215,7 +217,7 @@ def run_experiment(
     results = pd.DataFrame(columns=columns, index=range(t_rounds))
 
     # Record labels
-    z = y > best_f
+    z = thresh(y)
 
     # load search model components
     log.info(f"Setting up acquisition model ...")
@@ -245,6 +247,10 @@ def run_experiment(
             callback=callback,
         )
         proposal.eval()
+        if len(Xcand) > b_size:
+            raise RuntimeError(
+                f"Number of candidates {len(Xcand)} > batch size {b_size}"
+            )
         Xcand = Xcand.to("cpu").long()
         assert len(Xcand) <= b_size
         plot_optimisation(it, acquis, meangrad)
@@ -274,7 +280,7 @@ def run_experiment(
             break
 
         log.info(f"Updating fitness threshold ...")
-        best_f = thresh(y)
+        best_f = thresh.update(y)
         log.info(f" new threshold: {best_f:.3f}")
 
         log.info(f"Updating surrogate model ...")

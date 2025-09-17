@@ -18,7 +18,7 @@ from sklearn.model_selection import StratifiedKFold
 
 from experiments.dataclasses import DATASETS, seq2intarr
 from experiments.vis import CPplot
-from vsd import surrogates, thresholds
+from vsd import cpe, labellers
 
 
 def to_probability(logp: torch.Tensor) -> np.ndarray:
@@ -90,12 +90,12 @@ def train_surrogate(config, logdir, dataset, device):
     )
 
     # Get the first threshold
-    thresh_class = getattr(thresholds, config["threshold"]["class"])
+    thresh_class = getattr(labellers, config["threshold"]["class"])
     thresh = thresh_class(**config["threshold"]["args"])
-    best_f = thresh(y)
+    best_f = thresh.update(y)
 
     # Make the classifier data
-    z = (y > best_f).astype(int)
+    z = thresh(y)
     y = torch.tensor(y, dtype=torch.float32)
     nnzero = sum(z)
     log.info(f"Non-zero labels: #{nnzero}, proportion = {nnzero/len(z):.3f}")
@@ -114,8 +114,8 @@ def train_surrogate(config, logdir, dataset, device):
     baccs, lls = [], []
     device = config["device"]
     params = config["cpe"]["parameters"]
-    CPE = getattr(surrogates, config["cpe"]["class"])
-    if not issubclass(CPE, surrogates.ClassProbabilityModel):
+    CPE = getattr(cpe, config["cpe"]["class"])
+    if not issubclass(CPE, cpe.ClassProbabilityModel):
         log.error(f"{CPE} is not a subclass of ClassProbabilityModel")
         sys.exit(-1)
     for r, (tind, sind) in enumerate(cv.split(S, z)):
@@ -123,11 +123,11 @@ def train_surrogate(config, logdir, dataset, device):
         Xt, Xs, yt = X[tind], X[sind], y[tind]
         zt, zs = z[tind], z[sind]
         clf = CPE(seq_len=slen, alpha_len=cats, **params).to(device)
-        surrogates.fit_cpe(
+        cpe.fit_cpe(
             clf,
             Xt,
             yt,
-            best_f=best_f,
+            labeller=best_f,
             batch_size=config["cpe"]["batchsize"],
             stop_options=config["cpe"]["stop"],
             optimizer_options=config["cpe"]["optimisation"],
@@ -156,11 +156,11 @@ def train_surrogate(config, logdir, dataset, device):
         losses.append(loss.detach().to("cpu").numpy())
 
     clf = CPE(seq_len=slen, alpha_len=cats, **params).to(device)
-    surrogates.fit_cpe(
+    cpe.fit_cpe(
         clf,
         X,
         y,
-        best_f=best_f,
+        labeller=best_f,
         batch_size=config["cpe"]["batchsize"],
         stop_options=config["cpe"]["stop"],
         optimizer_options=config["cpe"]["optimisation"],

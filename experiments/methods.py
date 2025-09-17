@@ -12,7 +12,7 @@ from botorch.models.gpytorch import GPyTorchModel
 from vsd import proposals
 from vsd.acquisition import (
     CbASAcquisition,
-    LogPIClassiferAcquisition,
+    LogPIClassifierAcquisition,
     PIClassiferAcquisition,
     VariationalSearchAcquisition,
 )
@@ -20,14 +20,14 @@ from vsd.generation import (
     generate_candidates_adalead,
     generate_candidates_eda,
     generate_candidates_pex,
-    generate_candidates_reinforce,
+    generate_candidates_iw,
 )
 from vsd.proposals import (
     SearchDistribution,
     SequenceUninformativePrior,
-    TransitionSearchDistribution,
+    MaskedSearchDistribution,
 )
-from vsd.surrogates import ClassProbabilityModel
+from vsd.cpe import ClassProbabilityModel
 from vsd.utils import SequenceTensor
 
 
@@ -75,26 +75,26 @@ def _copy_prior(prior: SearchDistribution, proposal: SearchDistribution):
 
 
 def _initialise_transition_proposal(
-    proposal: TransitionSearchDistribution | SearchDistribution,
+    proposal: MaskedSearchDistribution | SearchDistribution,
     X_train: SequenceTensor,
     y_train: torch.Tensor,
     config: dict,
 ):
-    if not isinstance(proposal, TransitionSearchDistribution):
+    if not isinstance(proposal, MaskedSearchDistribution):
         return
     sind = torch.argsort(y_train, descending=True)[: config["b_cands"]]
     X0 = X_train[sind]
-    proposal.update(X0.to(config["device"]))
+    proposal.set_seeds(X0.to(config["device"]))
 
 
 def _create_logpi_acquistition(
     surrogate: ClassProbabilityModel | GPyTorchModel,
     best_f: torch.Tensor | float,
-) -> LogPIClassiferAcquisition | LogProbabilityOfImprovement:
+) -> LogPIClassifierAcquisition | LogProbabilityOfImprovement:
     """Basic log-PI acquisition"""
     if isinstance(surrogate, GPyTorchModel):
         return LogProbabilityOfImprovement(model=surrogate, best_f=best_f)
-    return LogPIClassiferAcquisition(model=surrogate)
+    return LogPIClassifierAcquisition(model=surrogate)
 
 
 def _create_pi_acquistition(
@@ -163,7 +163,6 @@ def get_cbas_components(
     proposal = _load_proposal(seq_len, alpha_len, config["proposal"], device)
     if config["proposal"]["from_prior"]:
         _copy_prior(prior, proposal)
-    _initialise_transition_proposal(proposal, X_train, y_train, config)
     _initialise_transition_proposal(proposal, X_train, y_train, config)
     acq = _create_logpi_acquistition(surrogate, best_f).to(device)
     cbas = CbASAcquisition(acq, prior).to(device)
@@ -318,20 +317,17 @@ class _CandidateContainer:
 def _wrap_reinforce_generation(config: dict) -> callable:
     def generate(acquisition_function, proposal_distribution, callback):
         candidate_samples = config["b_cands"]
-        if isinstance(proposal_distribution, TransitionSearchDistribution):
-            candidate_samples = 1
-        X_cand, acq_cand = generate_candidates_reinforce(
+        X_cand, acq_cand = generate_candidates_iw(
             acquisition_function=acquisition_function,
             proposal_distribution=proposal_distribution,
             stop_options=config["proposal"]["stop"],
             optimizer_options=config["proposal"]["optimisation"],
-            cv_smoothing=0.7,
             gradient_samples=config["proposal"]["samples"],
             candidate_samples=candidate_samples,
             callback=callback,
         )
-        if isinstance(proposal_distribution, TransitionSearchDistribution):
-            proposal_distribution.update(X_cand)
+        if isinstance(proposal_distribution, MaskedSearchDistribution):
+            proposal_distribution.set_seeds(X_cand)
         return X_cand, acq_cand
 
     return generate
@@ -340,8 +336,6 @@ def _wrap_reinforce_generation(config: dict) -> callable:
 def _wrap_eda_generation(config: dict) -> callable:
     def generate(acquisition_function, proposal_distribution, callback):
         candidate_samples = config["b_cands"]
-        if isinstance(proposal_distribution, TransitionSearchDistribution):
-            candidate_samples = 1
         X_cand, acq_cand = generate_candidates_eda(
             acquisition_function=acquisition_function,
             proposal_distribution=proposal_distribution,
@@ -351,8 +345,8 @@ def _wrap_eda_generation(config: dict) -> callable:
             candidate_samples=candidate_samples,
             callback=callback,
         )
-        if isinstance(proposal_distribution, TransitionSearchDistribution):
-            proposal_distribution.update(X_cand)
+        if isinstance(proposal_distribution, MaskedSearchDistribution):
+            proposal_distribution.set_seeds(X_cand)
         return X_cand, acq_cand
 
     return generate

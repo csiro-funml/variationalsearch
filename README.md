@@ -62,6 +62,17 @@ For all functionality and to develop, we recommend installing as below,
     git lfs pull
 
 
+### Development
+
+For development, we recommend installing at least
+
+    pip install .[dev]
+
+Which will bring in pytest, and allow you to run the unit tests,
+
+    pytest .
+
+
 ## Experiments
 
 

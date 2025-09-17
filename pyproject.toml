@@ -16,28 +16,42 @@ readme = "README.md"
 license = {file = "LICENSE.txt"}
 requires-python = ">=3.10"
 dependencies = [
-    "numpy",
+    "numpy<2",
     "scipy",
     "torch>=2.1.0",
     "botorch>=0.11",
     "polyleven",
+    "zuko",
+    "pymoo"
 ]
 
 [project.optional-dependencies]
+dev = [
+  "pytest",
+]
 experiments = [
     "click",
     "pandas",
-    "scikit-learn",
     "matplotlib",
+    "scikit-learn",
     "notebook",
     "seaborn",
     "torchvision"
 ]
 poli = [
-    "poli-baselines[lambo2,ehrlich]@git+ssh://git@github.com/MachineLearningLifeScience/poli-baselines.git",
-    "fastapi",
-    "pymoo",
-    "pytorch-holo"
+    "poli-core[protein,ehrlich]@git+https://github.com/MachineLearningLifeScience/poli.git",
+    "poli-baselines[lambo2]@git+ssh://git@github.com/MachineLearningLifeScience/poli-baselines.git",
+]
+poli-moo = [
+    "matplotlib<=3.8.1",
+    "poli-core[protein,ehrlich]@git+https://github.com/MachineLearningLifeScience/poli.git",
+    "poli-baselines[lambo2]@git+ssh://git@github.com/dsteinberg/poli-baselines.git@moo",
+    "biopython",
+    "ptitprince",
+    "PyGithub",
+    "mpl-scatter-density",
+    "pdbfixer@git+ssh://git@github.com/openmm/pdbfixer.git",
+    "pdb-tools"
 ]
 
 [tool.setuptools]
@@ -50,5 +64,11 @@ train_gp = "experiments.scripts.train_gp:train_surrogate"
 train_prior = "experiments.scripts.train_prior:train_prior"
 plot_results = "experiments.scripts.plot_results:plot_results"
 digits = "experiments.scripts.digits:digits"
-ehrlich = "experiments.scripts.ehrlich:ehrlich"
+ehrlich = "experiments.scripts.ehrlich:main"
 plot_ehrlich = "experiments.scripts.plot_ehrlich:plot_results"
+synfn_moo = "experiments.scripts.synfn_moo:main"
+ngrams = "experiments.scripts.ngrams:main"
+ehrlich_nat = "experiments.scripts.ehrlich_nat:main"
+foldx_ss = "experiments.scripts.foldx_ss:main"
+plot_moo_2d = "experiments.scripts.plot_moo_2d:plot_results"
+plot_ngrams = "experiments.scripts.plot_ngrams:plot_results"

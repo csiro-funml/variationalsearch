@@ -11,14 +11,13 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import torch.utils
 from PIL import Image
 from sklearn.metrics import balanced_accuracy_score
 from torch.utils.data import DataLoader
 from torchvision.datasets import MNIST
 
 from vsd.acquisition import (
-    LogPIClassiferAcquisition,
+    LogPIClassifierAcquisition,
     VariationalSearchAcquisition,
 )
 from vsd.generation import generate_candidates_reinforce
@@ -28,7 +27,7 @@ from vsd.proposals import (
     SearchDistribution,
     clip_gradients,
 )
-from vsd.surrogates import CNNClassProbability
+from vsd.cpe import CNNClassProbability
 
 mpl.use("Agg")
 
@@ -213,7 +212,7 @@ def digits(seed, device, resultsdir, cachedir, relearn, lstm):
         p.grad = None
         p.requires_grad = False
 
-    acq = LogPIClassiferAcquisition(model=clf).to(device)
+    acq = LogPIClassifierAcquisition(model=clf).to(device)
     pracq = VariationalSearchAcquisition(acq, prior).to(device)
 
     def callback(i: int, loss: torch.Tensor, grad: Tuple[torch.Tensor]):

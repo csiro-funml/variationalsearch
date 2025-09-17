@@ -8,14 +8,13 @@ from typing import Sequence
 
 import click
 import matplotlib as mpl
-import numpy as np
 
 mpl.use("Agg")
 import matplotlib.pyplot as plt
 import torch
 
 from experiments.dataclasses import DATASETS, seq2intarr
-from vsd import proposals, thresholds
+from vsd import labellers, proposals
 
 
 def plot_trace(
@@ -94,22 +93,16 @@ def train_prior(config, logdir, dataset, device):
     S, y = data.load_data(config["training_data"]["save_path"])
     if config["prior"]["use_threshold"]:
         log.info("Thresholding prior training data...")
-        thresh_class = getattr(thresholds, config["threshold"]["class"])
+        thresh_class = getattr(labellers, config["threshold"]["class"])
         thresh = thresh_class(**config["threshold"]["args"])
         best_f = thresh(y)
         pmask = y > best_f
         S = [S[i] for i, p in enumerate(pmask) if p]
 
-    log.info("Making validation data ...")
-    nval = config["training_data"]["size"]
-    val_ind = np.random.randint(len(data.S), size=nval)
-    S_val = [data.S[i] for i in val_ind]
-
     log.info("Tokenizing sequences ...")
     slen = data.get_seq_len()
     cats = data.get_alpha_len()
     X = seq2intarr(S, is_amino=cats > 4)
-    X_val = seq2intarr(S_val, is_amino=cats > 4)
 
     log.info("Training prior ...")
     its, losses, validation = [], [], []
@@ -131,13 +124,13 @@ def train_prior(config, logdir, dataset, device):
     proposals.fit_ml(
         prior,
         X,
-        X_val,
         batch_size=config["prior"]["batchsize"],
         optimizer_options=config["prior"]["optimisation"],
         stop_options=config["prior"]["stop"],
         device=config["device"],
         callback=callback,
         seed=config["seed"],
+        oob_epochs=config["prior"]["oob_epochs"],
     )
     torch.save(prior.state_dict(), Path(config["prior"]["save_path"]))
     plot_trace(
