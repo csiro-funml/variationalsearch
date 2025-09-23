@@ -58,7 +58,7 @@ from vsd.cpe import (
     make_contrastive_alignment_data,
 )
 from vsd.generation import generate_candidates_iw
-from vsd.preferences import EmpiricalPreferences, MixtureUnitNormal
+from vsd.preferences import EmpiricalPreferences, MixtureUnitNormal, UnitNormal
 from vsd.proposals import fit_ml
 from vsd.utils import is_non_dominated_strict
 from vsd.labellers import ParetoAnnealed
@@ -75,7 +75,6 @@ np.random.seed(SEED)
 random.seed(SEED)
 
 # Config
-USE_EMPIRICAL_PREFERENCES = False
 SAMPLES = 256
 NRESTARTS = 10
 START_PERCENTILE = 0.75
@@ -248,15 +247,21 @@ def callback(i, loss, vloss, logvloss=False):
 
 class AGPS:
 
-    def __init__(self, train_X, train_Y, ref_point, bsize, max_iter, device):
-        N, D = train_X.shape
+    def __init__(
+        self, train_X, train_Y, ref_point, bsize, max_iter, preference, device
+    ):
+        D = train_X.shape[1]
         M = train_Y.shape[1]
         self.eps = 1e-6
-        if USE_EMPIRICAL_PREFERENCES:
+        if preference == "empirical":
             self.preferences = EmpiricalPreferences()
-        else:
+        elif preference == "gmm":
             mu = torch.randn((GMM_K, M))
             self.preferences = MixtureUnitNormal(locs=mu, min_scale=self.eps)
+        elif preference == "normal":
+            self.preferences = UnitNormal(dim=M)
+        else:
+            raise ValueError(f"Unknown prefernce option {preference}")
         self.pareto_cpe = PreferenceContinuousCPE(
             x_dim=D,
             u_dims=M,
@@ -326,7 +331,7 @@ class AGPS:
 
         # Augment dataset with misalignments
         Xa, Ua, za = make_contrastive_alignment_data(X, U)
-        if USE_EMPIRICAL_PREFERENCES:
+        if isinstance(self.preferences, EmpiricalPreferences):
             self.preferences.set_preferences(U[z == 1, :] if round > 0 else U)
         else:
             print("Fitting preferences.")
@@ -418,6 +423,12 @@ class AGPS:
     "--device", type=str, default="cpu", help="device to use for solver."
 )
 @click.option("--seed", type=int, default=42, help="random seed.")
+@click.option(
+    "--preference",
+    type=click.Choice(["gmm", "normal", "empirical"]),
+    default="gmm",
+    help="preference distribution.",
+)
 def main(
     bbox,
     max_iter,
@@ -427,6 +438,7 @@ def main(
     logdir,
     device,
     seed,
+    preference,
 ):
     # Setup logging
     logdir = Path(logdir) / bbox
@@ -490,7 +502,13 @@ def main(
             hvs.append(1.0)
             if method == "A-GPS":
                 agps = AGPS(
-                    X_init, y_init, ref_point, bsize, max_iter, device=device
+                    X_init,
+                    y_init,
+                    ref_point,
+                    bsize,
+                    max_iter,
+                    preference,
+                    device=device,
                 )
             for i in range(max_iter):
                 log.info(f"  Training {method}: round {i} ... ")

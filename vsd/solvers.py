@@ -120,7 +120,7 @@ class _VariationalSolver(ABC, StepByStepSolver):
 
     name: str
     optim: T.Callable
-    vacquisition: AcquisitionFunction | MarginalAcquisition
+    vacquisition: type[AcquisitionFunction | MarginalAcquisition]
 
     def __init__(
         self,
@@ -348,7 +348,7 @@ class _MooVariationalSolver(ABC, StepByStepSolver):
 
     name: str
     optim: T.Callable
-    vacquisition: PreferenceAcquisition
+    vacquisition: type[PreferenceAcquisition]
 
     def __init__(
         self,
@@ -581,7 +581,7 @@ class CbASSolver(_VariationalSolver):
 
     name = "CbAS"
     optim = generate_candidates_eda
-    vacquisition = partial(CbASAcquisition)
+    vacquisition = CbASAcquisition
 
 
 class AGPSSolver(_MooVariationalSolver):

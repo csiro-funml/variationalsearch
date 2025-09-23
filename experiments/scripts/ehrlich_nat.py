@@ -306,6 +306,12 @@ def plot_cond_prefences(
     default=START_PERCENTILE,
     help="Start percentile for Pareto rank thresholding",
 )
+@click.option(
+    "--priordropout",
+    type=float,
+    default=None,
+    help="Prior dropout regularisation for the transformer models",
+)
 def main(
     solver,
     sequence_length,
@@ -319,11 +325,10 @@ def main(
     ref,
     gsamples,
     startp,
+    priordropout,
 ):
     # Setup logging
     solver_name = f"{solver}_{seed}"
-    # if "agps" in solver:
-    #     solver_name = f"{solver_name}_{startp:.2f}"
     logdir = Path(logdir) / sequence_length
     logdir.mkdir(exist_ok=True, parents=True)
     logfile = logdir / Path(f"{solver_name}.log")
@@ -380,6 +385,9 @@ def main(
 
     if solver not in ("lambo2", "rand"):
         alpha_len = len(black_box.alphabet)
+        if priordropout is None:
+            priordropout = PRIOR_DROPOUT[sequence_length]
+        log.info(f"Setting prior dropout p={priordropout:.3f}")
 
         # Variational distributions (or priors for AGPS)
         if "-lstm" in solver:
@@ -390,7 +398,7 @@ def main(
                     embedding_dim=EMBEDDING_DIM,
                     u_dims=L,
                     num_layers=LLAYERS,
-                    dropout=PRIOR_DROPOUT[sequence_length],
+                    dropout=priordropout,
                     hidden_size=LNETWORKS,
                     clip_gradients=1.0,
                 )
@@ -401,7 +409,7 @@ def main(
                     embedding_dim=EMBEDDING_DIM,
                     num_layers=LLAYERS,
                     hidden_size=LNETWORKS,
-                    dropout=PRIOR_DROPOUT[sequence_length],
+                    dropout=priordropout,
                     clip_gradients=1.0,
                 )
         elif "-tfm" in solver:
@@ -414,7 +422,7 @@ def main(
                     nhead=NHEADS,
                     num_layers=DLAYERS,
                     dim_feedforward=DNETWORKS,
-                    dropout=PRIOR_DROPOUT[sequence_length],
+                    dropout=priordropout,
                     clip_gradients=1.0,
                 )
             else:
@@ -425,7 +433,7 @@ def main(
                     nhead=NHEADS,
                     num_layers=DLAYERS,
                     dim_feedforward=DNETWORKS,
-                    dropout=PRIOR_DROPOUT[sequence_length],
+                    dropout=priordropout,
                     clip_gradients=1.0,
                 )
         elif "-mtfm" in solver:
@@ -440,7 +448,7 @@ def main(
                     dim_feedforward=DNETWORKS,
                     num_mutations=NUM_MUTATIONS[sequence_length],
                     replacement=False,
-                    dropout=PRIOR_DROPOUT[sequence_length] / 4,
+                    dropout=priordropout,
                     clip_gradients=1.0,
                 )
             else:
@@ -453,7 +461,7 @@ def main(
                     dim_feedforward=DNETWORKS,
                     num_mutations=NUM_MUTATIONS[sequence_length],
                     replacement=False,
-                    dropout=PRIOR_DROPOUT[sequence_length] / 4,
+                    dropout=priordropout,
                     clip_gradients=1.0,
                 )
 

@@ -53,7 +53,7 @@ def generate_candidates_reinforce(
     acquisition_function: AcquisitionFunction | PreferenceAcquisition,
     proposal_distribution: SearchDistribution | PreferenceSearchDistribution,
     cv_smoothing: float = 0.7,
-    optimizer: Optimizer = torch.optim.Adam,
+    optimizer: type[Optimizer] = torch.optim.Adam,
     optimizer_options: Optional[Dict[str, Union[float, str]]] = None,
     stop_options: Optional[Dict[str, Union[float, str]]] = None,
     callback: Optional[
@@ -164,7 +164,7 @@ def generate_candidates_reinforce(
 def generate_candidates_iw(
     acquisition_function: AcquisitionFunction,
     proposal_distribution: SearchDistribution | PreferenceSearchDistribution,
-    optimizer: Optimizer = torch.optim.Adam,
+    optimizer: type[Optimizer] = torch.optim.Adam,
     optimizer_options: Optional[Dict[str, Union[float, str]]] = None,
     stop_options: Optional[Dict[str, Union[float, str]]] = None,
     callback: Optional[
@@ -288,7 +288,7 @@ def generate_candidates_iw(
 def generate_candidates_eda(
     acquisition_function: AcquisitionFunction,
     proposal_distribution: SearchDistribution | PreferenceSearchDistribution,
-    optimizer: Optimizer = torch.optim.Adam,
+    optimizer: type[Optimizer] = torch.optim.Adam,
     optimizer_options: Optional[Dict[str, Union[float, str]]] = None,
     stop_options: Optional[Dict[str, Union[float, str]]] = None,
     callback: Optional[
