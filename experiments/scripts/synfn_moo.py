@@ -1,4 +1,4 @@
-### Synthetic function MOO experiments.###
+"""Synthetic function MOO experiments."""
 
 import warnings
 from itertools import cycle
@@ -65,7 +65,6 @@ from vsd.labellers import ParetoAnnealed
 
 warnings.filterwarnings("ignore")
 mpl.use("Agg")
-# torch.autograd.set_detect_anomaly(True)
 
 # Settings and constants
 
@@ -583,6 +582,11 @@ def main(
     plt.tight_layout()
     plt.savefig(logdir / (bbox + "_hypervol.png"))
     plt.close()
+
+    # Save results
+    log.info(f"Saving hypervolume results to {logdir / "results.npz"}")
+    results = {m: np.array(a) for m, a in results.items()}
+    np.savez(logdir / "results.npz", **results)
 
 
 def plot_agps_prefs(Y_agps, ref_point, agps, bb, bb_name, path):
