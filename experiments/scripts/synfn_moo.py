@@ -476,6 +476,7 @@ def main(
     X_init = torch.tensor(LatinHypercube(d=D, rng=SEED).random(n=tsize)).float()
     y_init = bb(X_init)
     M = y_init.shape[1]
+    log.info(f"{bbox}: D = {D}, M = {M}")
     ref_point = obj_mappings[bbox]["ref_point"]
     if ref_point is None:
         ref_point = infer_reference_point(y_init)

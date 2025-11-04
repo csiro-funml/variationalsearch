@@ -1,4 +1,4 @@
-"""Solver interfaces for VSD and other methods for poli compatibility
+"""Solver interfaces for VSD and poli compatibility.
 
 See https://machinelearninglifescience.github.io/poli-docs/contributing/a_new_solver.html
 """
@@ -7,7 +7,6 @@ import logging
 import typing as T
 from abc import ABC
 from copy import deepcopy
-from functools import partial
 
 import numpy as np
 import torch
@@ -64,58 +63,55 @@ LOG = logging.getLogger(name=__name__)
 
 
 class _VariationalSolver(ABC, StepByStepSolver):
-    """
-    Variational solver for single-objective optimization.
+    """Variational solver for single-objective optimisation.
 
-    optim: callable = None
-    vacquisition: VariationalSearchAcquisition = None
+    The high-level loop:
 
-        This class implements a step-by-step solver that:
-
-    1. Fits a class probability estimator (CPE) to distinguish "positive"
-        examples (above threshold).
-    2. Fits a variational distribution to approximate the posterior over good
-        solutions.
-    3. Optionally fits a prior distribution to avoid overfitting.
-    4. Optimizes an acquisition function (LogPIClassifierAcquisition) to propose
-        new candidates.
+    1. Fit a class-probability estimator (CPE) separating positive examples.
+    2. Optionally fit a prior distribution to avoid overfitting.
+    3. Fit a variational search distribution approximating the posterior over
+       promising designs.
+    4. Sample variational search distribution for candidates.
 
     Parameters
     ----------
     black_box : AbstractBlackBox
-        Black-box function interface.
+        Objective evaluated by the solver.
+    alphabet : Sequence
+        Alphabet used to tokenise sequences.
     x0 : ndarray
-        Initial input samples.
+        Initial designs.
     y0 : ndarray or None
-        Initial observed outputs.
-    labeller : Labeller
-        Labeller function for classifying positive samples.
+        Initial objective evaluations. If ``None`` they are queried from
+        ``black_box``.
+    labeller : callable or Labeller
+        Labelling strategy turning objective values into binary outcomes.
     cpe : ClassProbabilityModel
-        Class probability estimator for positive/negative classification.
-    vdistribution : SequenceSearchDistribution or AutoRegressiveSearchDistribution
-        Variational search distribution to be optimized.
-    prior : SequenceSearchDistribution or AutoRegressiveSearchDistribution or None, optional
-        Prior search distribution (if None, will be fitted from data).
-    bsize : int, optional
-        Batch size for candidate generation. Default is 128.
-    device : str or torch.device, optional
-        Computation device. Default is "cpu".
-    cpe_options : dict or None, optional
-        Options for CPE fitting.
-    prior_options : dict or None, optional
-        Options for prior fitting.
-    vdist_options : dict or None, optional
-        Options for variational distribution optimization.
-    cpe_validation_prop : float, optional
-        Proportion for CPE validation split. Default is 0.
-    prior_val_prop : float, optional
-        Proportion of data to use as a fixed validation set when fitting the
-        prior (via maximum likelihood). Set to 0 to disable validation.
-    seed : int or None, optional
-        Random seed.
-    acq_fn_kwargs : dict or None, optional
-        Additional keyword arguments for acquisition function.
-
+        Class-probability estimator.
+    vdistribution : SequenceSearchDistribution | AutoRegressiveSearchDistribution
+        Variational search distribution to optimise.
+    prior : SequenceSearchDistribution | AutoRegressiveSearchDistribution | None, optional
+        Optional prior distribution to regularise the search.
+    bsize : int, default=128
+        Batch size used when generating candidates.
+    device : str | torch.device, default="cpu"
+        Device on which to perform optimisation.
+    cpe_options : dict, optional
+        Options forwarded to the CPE fitting routine.
+    prior_options : dict, optional
+        Options for fitting the prior distribution.
+    vdist_options : dict, optional
+        Options for optimising the variational proposal.
+    cpe_validation_prop : float, default=0
+        Validation proportion when fitting the CPE.
+    prior_val_prop : float, default=0
+        Validation proportion when fitting the prior via ML.
+    topk_selection : bool, default=False
+        If ``True``, select top-K candidates after each iteration.
+    seed : int, optional
+        Random seed for reproducibility.
+    acq_fn_kwargs : dict, optional
+        Additional keyword arguments for acquisition construction.
     """
 
     name: str
@@ -281,69 +277,60 @@ class _VariationalSolver(ABC, StepByStepSolver):
 
 
 class _MooVariationalSolver(ABC, StepByStepSolver):
-    """
-    Variational solver for multi-objective optimization with preferences.
+    """Variational solver for multi-objective optimisation with preferences.
 
-    This class implements a step-by-step solver that:
-    1. Fits a Pareto front CPE to distinguish non-dominated solutions.
-    2. Fits a preference CPE to model user/stochastic preferences.
-    3. Updates the conditional variational distribution based on learned
-        preferences.
-    4. Optimizes the acquisition function via reinforcement (or EDA) to propose
-        new candidates.
+    The loop:
+
+    1. Fit a Pareto-front CPE to identify non-dominated points.
+    2. Fit a preference CPE that scores candidate/context pairs.
+    3. Fit the preference distribution using the normalised targets.
+    4. Fit a variational search distribution approximating the posterior over
+       promising designs.
+    5. Sample preference distribution and variational search distribution for
+       candidates.
 
     Parameters
     ----------
     black_box : AbstractBlackBox
-        Black-box function interface.
+        Objective evaluated by the solver.
+    alphabet : Sequence
+        Alphabet used to tokenise sequences.
     x0 : ndarray
-        Initial input samples.
+        Initial designs.
     y0 : ndarray or None
-        Initial observed outputs.
+        Initial objective evaluations. If ``None`` they are queried from
+        ``black_box``.
+    labeller : callable | ParetoFront
+        Labelling strategy for Pareto membership.
     pareto_cpe : PreferenceClassProbabilityModel
-        CPE for Pareto front membership.
+        CPE predicting non-dominance.
     preference_cpe : PreferenceClassProbabilityModel
-        CPE for preference modeling.
+        CPE modelling user/stochastic preferences.
     vdistribution : PreferenceSearchDistribution
-        Conditional search distribution q(X|U).
-    prior : Distribution or SearchDistribution
-        Prior search distribution.
-    bsize : int, optional
-        Batch size for candidate generation. Default is 32.
-    device : str or torch.device, optional
-        Computation device. Default is "cpu".
-    seed : int or None, optional
-        Random seed.
-    par_cpe_options : dict or None
-        Options for Pareto CPE fitting.
-    pre_cpe_options : dict or None
-        Options for preference CPE fitting.
-    vdist_options : dict or None
-        Options for variational distribution optimization.
-    prior_options : dict or None
-        Options for prior fitting.
-    pref_options : dict or None
-        Options for preference direction distribution fitting.
-    fit_only_pareto_directions : bool, optional
-        If True, fit the preference direction distribution using only
-        directions from Pareto-positive examples (z == 1).
-    prior_val_prop : float, optional
-        Proportion of data to use as a fixed validation set when fitting the
-        prior (via maximum likelihood). Set to 0 to disable validation.
-
-
-    Attributes
-    ----------
-    vdistribution : PreferenceSearchDistribution
-        Conditional search distribution with preferences.
-    pareto_cpe : PreferenceClassProbabilityModel
-        Trained CPE for Pareto membership.
-    preference_cpe : PreferenceClassProbabilityModel
-        Trained CPE for continuous preferences.
-    prior : Distribution or SearchDistribution
-        Prior distribution (frozen after fitting).
-    ref_point : Tensor or None
-        Reference point used for hypervolume.
+        Conditional search distribution ``q(X | U)``.
+    prior : SearchDistribution | None, optional
+        Optional prior distribution.
+    ref : Tensor, optional
+        Reference point for hypervolume estimation. Defaults to inferred.
+    bsize : int, default=128
+        Batch size used when generating candidates.
+    device : str | torch.device, default="cpu"
+        Device on which to perform optimisation.
+    par_cpe_options, pre_cpe_options, prior_options, vdist_options, pref_options : dict, optional
+        Keyword arguments forwarded to the respective fitting routines.
+    fit_only_pareto_directions : bool, default=True
+        If ``True``, update the preference distribution using Pareto-positive
+        directions only.
+    cpe_validation_prop : float, default=0
+        Validation proportion when fitting CPEs in the first round.
+    prior_val_prop : float, default=0
+        Validation proportion when fitting the conditional prior.
+    topk_selection : bool, default=False
+        If ``True``, select top-K candidates after each iteration.
+    seed : int, optional
+        Random seed for reproducibility.
+    acq_fn_kwargs : dict, optional
+        Additional keyword arguments for acquisition construction.
     """
 
     name: str
@@ -714,9 +701,21 @@ def seq2int_padded(
     mapping: T.Dict[str, int],
     pad_token: str = "-",
 ) -> Tensor:
-    """
-    Tokenize each sequence in S via mapping, then pad all to the same length
-    using the index of pad_token. Returns a LongTensor of shape (batch, max_len).
+    """Tokenise sequences and pad them to a common length.
+
+    Parameters
+    ----------
+    S : list[Sequence[str]]
+        Input sequences.
+    mapping : dict[str, int]
+        Token-to-index mapping.
+    pad_token : str, default="-"
+        Token used for padding.
+
+    Returns
+    -------
+    Tensor
+        Long tensor of shape ``(batch, max_len)`` containing padded indices.
     """
     # ensure pad_token in mapping
     if pad_token not in mapping:
@@ -737,13 +736,19 @@ def seq2int_padded(
 
 
 def to_char_list(seq: T.Union[np.ndarray, T.Sequence[str], str]) -> T.List[str]:
-    """
-    Normalize seq into a flat list of single-character tokens.
-    Works for:
-      - np.array([["string"]])
-      - np.array(["s","t",...])
-      - ["string"]
-      - "string"
+    """Normalise an input sequence to a list of single-character tokens.
+
+    Supports strings, iterables of strings, and NumPy arrays of either form.
+
+    Parameters
+    ----------
+    seq : array-like or str
+        Sequence to normalise.
+
+    Returns
+    -------
+    list[str]
+        Flattened list of single-character tokens.
     """
     arr = np.atleast_1d(seq)  # 1-D or higher
     arr = np.squeeze(arr)  # remove size-1 dims
@@ -762,9 +767,21 @@ def to_char_list(seq: T.Union[np.ndarray, T.Sequence[str], str]) -> T.List[str]:
 def int2seq_unpad(
     X: Tensor, mapping: T.Dict[int, str], pad_token: str = "-"
 ) -> np.ndarray:
-    """
-    Convert a padded tensor X back into an ndarray of unpadded sequences.
-    Splits each row at the first pad_token.
+    """Convert padded integer sequences back to tokens and strip padding.
+
+    Parameters
+    ----------
+    X : Tensor
+        Padded integer tensor.
+    mapping : dict[int, str]
+        Index-to-token mapping.
+    pad_token : str, default="-"
+        Padding token to remove.
+
+    Returns
+    -------
+    numpy.ndarray
+        Array of unpadded token sequences.
     """
     # ensure pad_token in mapping
     if pad_token not in mapping.values():

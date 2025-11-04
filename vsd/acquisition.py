@@ -3,46 +3,6 @@ r"""Acquisition functions for (variational) Bayesian optimisation.
 This module provides small, composable wrappers used throughout VSD (Variational
 Search Distributions) and A-GPS (Amortized Generation of Pareto Sets).
 
-Key ideas
----------
-1) **Class-probability acquisitions**
-   - Use a classifier (CPE) that returns `log p(z=1|x)` to realise (log)
-     Probability of Improvement (PI). These are black-box friendly, do not
-     require surrogate gradients, and are stable under label noise.
-
-2) **Variational search acquisitions**
-   - Reparameterise the search objective with a KL regulariser against a prior
-     over designs `p(x)` (or a *search distribution*). For a batch of candidate
-     designs `x ~ q(x)`, the generic objective is:
-
-       .. math::
-           \mathcal{L}(x) = \underbrace{\text{acq}(x)}_{\text{utility}}
-                           - \underbrace{\lambda\,\mathrm{KL}\big[q(x)\,\|\,p(x)\big]}_{\text{regularisation}}
-
-     In practice, this is implemented point-wise as
-
-       .. math::
-           \text{acq}(x) - \lambda\,(\log q(x) - \log p(x)).
-
-   - The scalar ``kl_weight`` (``λ``) plays the role of *power-VI* temperature:
-       * ``kl_weight = 1.0`` recovers the standard VI objective and is
-         appropriate when the goal is to learn the *Bayesian posterior* over
-         improving designs, e.g. ``q(x) ≈ p(x | z=1)``.
-       * ``kl_weight < 1.0`` (e.g. ``0.5``) down-weights the KL, allowing more
-         exploitation and empirically improving black-box optimisation progress
-         in early rounds at the cost of a looser approximation.
-
-3) **CbAS**
-   - Implements the original CbAS reweighting (``kl_weight = 1.0``) with a
-     numerically stable exponential via a max-shift.
-
-Shapes & conventions
---------------------
-* Inputs ``X`` may arrive with superfluous singleton dimensions; ``_squeeze``
-  ensures shape ``(N, D)``. ``logqX`` is a tensor broadcastable to ``(N,)``.
-* ``prior_dist`` may be a torch ``Distribution`` or a ``SearchDistribution``
-  from this codebase, both defining ``log_prob``.
-
 Notes
 -----
 * All modules are ``torch.nn.Module`` or BoTorch ``AcquisitionFunction`` so they
@@ -53,7 +13,6 @@ Notes
 from abc import abstractmethod
 
 import torch
-from torch import nn
 from botorch.acquisition import AcquisitionFunction
 from botorch.acquisition.analytic import LogProbabilityOfImprovement
 from torch import Tensor

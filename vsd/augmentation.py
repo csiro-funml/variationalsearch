@@ -11,16 +11,21 @@ import torch
 from torch import Tensor
 
 
-class AugementGenerator(ABC):
+class AugmentGenerator(ABC):
     """Abstract base for augmenters.
+
+    Parameters
+    ----------
+    None
+        Concrete subclasses implement :meth:`fit` and :meth:`generate`.
 
     Methods
     -------
-    fit(X):
+    fit(X)
         Learn any statistics from data ``X``.
-    generate(samples):
-        Produce ``samples`` augmented examples with the same dtype/shape logic
-        as the fitted data.
+    generate(samples)
+        Produce augmented examples with the same dtype/shape logic as the
+        fitted data.
     """
 
     def __init__(self): ...
@@ -34,7 +39,7 @@ class AugementGenerator(ABC):
         """Generate ``samples`` augmented items."""
 
 
-class TransitionAugmenter(AugementGenerator):
+class TransitionAugmenter(AugmentGenerator):
     """Sequence augmenter using an empirical first-order transition model.
 
     Parameters
@@ -64,7 +69,7 @@ class TransitionAugmenter(AugementGenerator):
 
         # Randomly mutate each sequence based on transition probabilities
         for x in Xs:
-            nmut = torch.randint(low=1, high=self.max_mutations, size=[1])
+            nmut = torch.randint(low=1, high=self.max_mutations + 1, size=[1])
             site = torch.randint(low=1, high=self.d, size=torch.Size(nmut))
             x[site] = torch.hstack([self.pA[j].sample() for j in x[site - 1]])
         return Xs

@@ -5,7 +5,6 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=0
-#SBATCH --account=OD-239291
 
 module load python
 module load pytorch/2.7.1-py312-cu124-mpi

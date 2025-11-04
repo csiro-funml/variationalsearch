@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vsd"
-version = "0.9"
+version = "1.0"
 description = "Variational search distributions"
 authors = [
   {name = "Dan Steinberg", email = "dan.steinberg@data61.csiro.au"},

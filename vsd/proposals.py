@@ -12,7 +12,7 @@ import torch.nn.functional as fnn
 from torch import Tensor
 from torch.optim import Optimizer
 
-from vsd.augmentation import AugementGenerator
+from vsd.augmentation import AugmentGenerator
 from vsd.utils import (
     batch_indices,
     batch_indices_val,
@@ -64,6 +64,20 @@ class SearchDistribution(ABC, torch.nn.Module):
         self.clip_gradients = clip_gradients
 
     def forward(self, samples: Optional[int] = None) -> Tuple[Tensor, Tensor]:
+        """Draw samples and return their log-density under ``q``.
+
+        Parameters
+        ----------
+        samples : int, optional
+            Number of samples to draw. Defaults to the value configured at
+            initialisation.
+
+        Returns
+        -------
+        tuple[Tensor, Tensor]
+            Pair ``(X, logqX)`` where ``X`` has shape ``(samples, ...)`` and
+            ``logqX`` is the element-wise log-probability.
+        """
         samples = self.samples if samples is None else samples
         with torch.no_grad():
             Xs = self.sample(torch.Size([samples]))
@@ -71,20 +85,58 @@ class SearchDistribution(ABC, torch.nn.Module):
         return Xs, logqX
 
     @abstractmethod
-    def sample(self, sample_shape: torch.Size = torch.Size([1])) -> Tensor: ...
+    def sample(self, sample_shape: torch.Size = torch.Size([1])) -> Tensor:
+        """Generate samples from the proposal.
+
+        Parameters
+        ----------
+        sample_shape : torch.Size, optional
+            Leading batch dimensions for the sample call. Defaults to a single
+            sample along the first dimension.
+
+        Returns
+        -------
+        Tensor
+            Samples drawn from the proposal ``q``.
+        """
 
     @abstractmethod
-    def log_prob(self, X: Tensor) -> Tensor: ...
+    def log_prob(self, X: Tensor) -> Tensor:
+        """Evaluate ``log q(X)`` element-wise.
+
+        Parameters
+        ----------
+        X : Tensor
+            Batch of samples at which to evaluate the log-density.
+
+        Returns
+        -------
+        Tensor
+            Log-probabilities with one entry per row of ``X``.
+        """
 
     def set_dropout_p(self, p: float):
-        """Reset dropout p -- useful for multiple training steps."""
+        """Reset dropout probability on all contained modules.
+
+        Useful when alternating between train/eval style loops.
+
+        Parameters
+        ----------
+        p : float
+            Dropout probability to assign to every ``Dropout``
+            /``MultiheadAttention`` module.
+        """
         for m in self.modules():
             if isinstance(m, torch.nn.Dropout):
                 m.p = p
 
 
 class SimpleSearchDistribution(SearchDistribution, _TestMixin):
-    """A simplified interface for variational distributions."""
+    """Convenience base class for proposals defined via distributions.
+
+    Subclasses implement ``_construct_q`` returning a ``torch.distributions``
+    object; sampling and log-probability are handled centrally.
+    """
 
     def __init__(
         self, samples: int = 100, clip_gradients: Optional[float] = None
@@ -95,10 +147,12 @@ class SimpleSearchDistribution(SearchDistribution, _TestMixin):
         _TestMixin.__init__(self)
 
     def log_prob(self, X: Tensor) -> Tensor:
+        """Evaluate ``log q(X)`` via the constructed distribution."""
         return self._construct_q().log_prob(X)
 
     @torch.no_grad()
     def sample(self, sample_shape: torch.Size = torch.Size([1])) -> Tensor:
+        """Draw samples with optional recording for unit tests."""
         q = self._construct_q()
         Xs = q.sample(sample_shape)
 
@@ -118,7 +172,21 @@ class SimpleSearchDistribution(SearchDistribution, _TestMixin):
 
 
 class GaussianKDEProposal(SimpleSearchDistribution):
-    """Gaussian KDE/mixture search distribution."""
+    """Gaussian KDE/mixture search distribution.
+
+    Parameters
+    ----------
+    d_features : int
+        Dimensionality of the design space.
+    k_components : int, default=20
+        Number of mixture components.
+    scale : float, default=1
+        Shared standard deviation across mixture components.
+    mu_scale_init : float, default=1
+        Scaling factor for the initial component means.
+    samples : int, default=100
+        Default number of samples to draw per ``forward`` call.
+    """
 
     def __init__(
         self,
@@ -149,7 +217,19 @@ class GaussianKDEProposal(SimpleSearchDistribution):
 
 
 class SequenceSearchDistribution(SimpleSearchDistribution):
-    """Abstract base for search distributions over sequences."""
+    """Abstract base for proposals over discrete sequences.
+
+    Parameters
+    ----------
+    d_features : int
+        Sequence length.
+    k_categories : int
+        Alphabet size for each position.
+    samples : int, default=100
+        Default number of samples to draw.
+    clip_gradients : float, optional
+        Gradient clipping value applied during optimisation.
+    """
 
     def __init__(
         self,
@@ -164,7 +244,15 @@ class SequenceSearchDistribution(SimpleSearchDistribution):
 
 
 class SequenceUninformativePrior(SequenceSearchDistribution):
-    """Uniform prior over sequences -- no learnable parameters."""
+    """Uniform prior over sequences with no learnable parameters.
+
+    Parameters
+    ----------
+    d_features : int
+        Sequence length.
+    k_categories : int
+        Alphabet size; each position is uniform over ``k_categories``.
+    """
 
     def __init__(self, d_features: int, k_categories: int):
         super().__init__(d_features=d_features, k_categories=k_categories)
@@ -175,7 +263,20 @@ class SequenceUninformativePrior(SequenceSearchDistribution):
 
 
 class MultiCategoricalProposal(SequenceSearchDistribution):
-    """Independent/Mean field multi-categorical search distribution."""
+    """Independent/mean-field multi-categorical search distribution.
+
+    Parameters
+    ----------
+    d_features : int
+        Sequence length.
+    k_categories : int
+        Alphabet size.
+    samples : int, default=100
+        Default number of samples to draw.
+    uniform_init : bool, default=False
+        If ``True``, initialise logits uniformly; otherwise use random
+        symmetric initialisation.
+    """
 
     def __init__(
         self,
@@ -204,7 +305,19 @@ class MultiCategoricalProposal(SequenceSearchDistribution):
 
 
 class AutoRegressiveSearchDistribution(SearchDistribution):
-    """Abstract base for autoregressive search distributions over sequences."""
+    """Abstract base for autoregressive sequence proposals.
+
+    Parameters
+    ----------
+    d_features : int
+        Sequence length.
+    k_categories : int
+        Alphabet size.
+    samples : int, default=100
+        Default number of samples drawn by ``forward``.
+    clip_gradients : float, optional
+        Gradient clipping value applied during optimisation.
+    """
 
     def __init__(
         self,
@@ -219,6 +332,7 @@ class AutoRegressiveSearchDistribution(SearchDistribution):
 
 
 class _LSTMMixin(torch.nn.Module, _TestMixin):
+    """Mixin providing LSTM backbone for autoregressive proposals."""
 
     def __init__(
         self,
@@ -299,7 +413,27 @@ class _LSTMMixin(torch.nn.Module, _TestMixin):
 
 
 class LSTMProposal(AutoRegressiveSearchDistribution, _LSTMMixin):
-    """Long short-term memory RNN search distribution."""
+    """Long short-term memory RNN search distribution.
+
+    Parameters
+    ----------
+    d_features : int
+        Sequence length.
+    k_categories : int
+        Alphabet size.
+    embedding_dim : int, optional
+        Token embedding dimension. Defaults to ``max(8, k//2)``.
+    hidden_size : int, optional
+        Hidden size of the LSTM; defaults to ``8 * embedding_dim``.
+    num_layers : int, default=1
+        Number of stacked LSTM layers.
+    dropout : float, default=0.0
+        Dropout probability applied between LSTM layers.
+    samples : int, default=100
+        Default number of samples returned by ``forward``.
+    clip_gradients : float, optional
+        Gradient clipping value applied during optimisation.
+    """
 
     def __init__(
         self,
@@ -334,15 +468,35 @@ class LSTMProposal(AutoRegressiveSearchDistribution, _LSTMMixin):
         return self.e0.tile(samples, 1)
 
     def sample(self, sample_shape: torch.Size = torch.Size([1])) -> Tensor:
+        """Draw autoregressive samples using the learned LSTM."""
         Xs = self._sample(sample_shape=sample_shape)
         return Xs
 
     def log_prob(self, X: Tensor) -> Tensor:
+        """Evaluate the autoregressive log-probability under the LSTM."""
         return self._log_prob(X=X)
 
 
 class _TransformerBackbone(torch.nn.Module):
-    """Shared embedding + positional + encoder (+ optional token head)."""
+    """Shared embedding, positional encoding, and transformer encoder stack.
+
+    Parameters
+    ----------
+    k_categories : int
+        Vocabulary size for the embedding.
+    embedding_dim : int, optional
+        Dimensionality of token embeddings. Defaults to ``max(8, k//2) * nhead``.
+    nhead : int, default=2
+        Number of attention heads.
+    dim_feedforward : int, default=128
+        Hidden dimension of the feed-forward sublayers.
+    dropout : float, default=0.0
+        Dropout probability applied throughout the transformer.
+    num_layers : int, default=1
+        Number of encoder layers.
+    add_mask_token : bool, default=False
+        Whether to append an extra embedding slot used as a mask token.
+    """
 
     def __init__(
         self,
@@ -384,9 +538,17 @@ class _TransformerBackbone(torch.nn.Module):
         return e
 
     def encode(self, X: Tensor) -> torch.Tensor:
-        """Return encoded hidden states (B, L, e).
+        """Return encoded hidden states with bi-directional masking.
 
-        This implements bi-directional masking.
+        Parameters
+        ----------
+        X : Tensor
+            Token indices of shape ``(B, L)``.
+
+        Returns
+        -------
+        Tensor
+            Encoded representations with shape ``(B, L, e)``.
         """
         return self.tfm(self.pos(self._change_embeddings(self.emb(X))))
 
@@ -408,6 +570,7 @@ class _TransformerBackbone(torch.nn.Module):
 
 
 class _DTransformerMixin(_TransformerBackbone, _TestMixin):
+    """Mixin implementing decoder-only transformer sampling utilities."""
 
     def __init__(
         self,
@@ -475,7 +638,29 @@ class _DTransformerMixin(_TransformerBackbone, _TestMixin):
 class DTransformerProposal(
     AutoRegressiveSearchDistribution, _DTransformerMixin
 ):
-    """Causal decoder-only transformer search distribution."""
+    """Causal decoder-only transformer search distribution.
+
+    Parameters
+    ----------
+    d_features : int
+        Sequence length.
+    k_categories : int
+        Alphabet size.
+    embedding_dim : int, optional
+        Token embedding dimension. Defaults to ``max(8, k//2) * nhead``.
+    nhead : int, default=2
+        Number of attention heads.
+    dim_feedforward : int, default=128
+        Hidden dimension of the feed-forward sublayers.
+    dropout : float, default=0.0
+        Dropout probability used across the transformer stack.
+    num_layers : int, default=1
+        Number of decoder blocks.
+    samples : int, default=100
+        Default number of samples returned by ``forward``.
+    clip_gradients : float, optional
+        Gradient clipping value applied during optimisation.
+    """
 
     def __init__(
         self,
@@ -512,10 +697,12 @@ class DTransformerProposal(
         return self.e0.tile(samples, 1)
 
     def sample(self, sample_shape: torch.Size = torch.Size([1])) -> Tensor:
+        """Draw autoregressive samples using the decoder-only transformer."""
         Xs = self._sample(sample_shape=sample_shape)
         return Xs
 
     def log_prob(self, X: Tensor) -> Tensor:
+        """Evaluate the autoregressive log-probability under the transformer."""
         return self._log_prob(X=X)
 
 
@@ -525,7 +712,21 @@ class DTransformerProposal(
 
 
 class MaskedSearchDistribution(SequenceSearchDistribution):
-    """Abstract base class for masked/mutation search distributions, q(X|X0)."""
+    """Abstract base for masked/mutation proposals ``q(X | X0)``.
+
+    Parameters
+    ----------
+    d_features : int
+        Sequence length.
+    k_categories : int
+        Alphabet size.
+    X0 : Tensor, optional
+        Seed sequences the proposal mutates from.
+    samples : int, default=100
+        Default number of samples per ``forward`` call.
+    clip_gradients : float, optional
+        Gradient clipping value applied during optimisation.
+    """
 
     def __init__(
         self,
@@ -551,15 +752,18 @@ class MaskedSearchDistribution(SequenceSearchDistribution):
     def sample(self, sample_shape: torch.Size = torch.Size([1])) -> Tensor: ...
 
     def set_seeds(self, X0: Tensor):
+        """Register seed sequences used during sampling."""
         self.X0 = X0
         self.X0s = None
 
     def clear_seeds(self):
+        """Remove cached seeds to force re-sampling on next draw."""
         self.X0 = None
         self.X0s = None
 
     @torch.no_grad()
     def _sample_seeds(self, samples: int) -> Tensor:
+        """Draw a minibatch of seeds with/without replacement."""
         X0 = self._check_seeds()
         N0 = len(X0)
         if N0 < samples:  # With replacement
@@ -581,6 +785,7 @@ class MaskedSearchDistribution(SequenceSearchDistribution):
 
 
 class _TransformerMLMBackbone(_TransformerBackbone):
+    """Backbone for masked language-model style proposals."""
 
     def __init__(
         self,
@@ -660,6 +865,7 @@ class _TransformerMLMBackbone(_TransformerBackbone):
 
 
 class _TransformerMLMMixin(_TransformerMLMBackbone, _TestMixin):
+    """Mixin providing MLM-style masking, sampling, and scoring."""
 
     def __init__(
         self,
@@ -734,7 +940,34 @@ class _TransformerMLMMixin(_TransformerMLMBackbone, _TestMixin):
 class TransformerMLMProposal(MaskedSearchDistribution, _TransformerMLMMixin):
     """Masked Transformer model that randomly mutates.
 
-    Good for using as a prior generative model.
+    Parameters
+    ----------
+    d_features : int
+        Sequence length.
+    k_categories : int
+        Alphabet size.
+    mask_p : float, default=0.15
+        Probability of masking each token during sampling/training.
+    X0 : Tensor, optional
+        Seed sequences to mutate from when acting as a transition model.
+    embedding_dim : int, optional
+        Token embedding dimension. Defaults to ``max(8, k//2) * nhead``.
+    nhead : int, default=2
+        Number of attention heads.
+    dim_feedforward : int, default=128
+        Hidden dimension of the feed-forward sublayers.
+    dropout : float, default=0.0
+        Dropout probability used throughout the transformer.
+    num_layers : int, default=1
+        Number of encoder layers.
+    pad_token : int, optional
+        Token index treated as padding/immutable.
+    gibbs_steps : int, default=20
+        Number of masked language model refinement steps during sampling.
+    samples : int, default=100
+        Default number of samples returned by ``forward``.
+    clip_gradients : float, optional
+        Gradient clipping value applied during optimisation.
     """
 
     def __init__(
@@ -779,6 +1012,7 @@ class TransformerMLMProposal(MaskedSearchDistribution, _TransformerMLMMixin):
         self,
         sample_shape: torch.Size = torch.Size([1]),
     ) -> Tensor:
+        """Draw samples by repeatedly masking and resampling tokens."""
         if len(sample_shape) > 1:
             raise ValueError("Sample shapes of dim > 1 not implemented.")
         samples = int(sample_shape[0])
@@ -787,6 +1021,7 @@ class TransformerMLMProposal(MaskedSearchDistribution, _TransformerMLMMixin):
         return Xs
 
     def log_prob(self, X: Tensor) -> Tensor:
+        """Compute the masked-language-model log-probability of ``X``."""
         X0 = None  # Evaluate against masked X0
         if self.X0s is not None:  # Evaluate against previous samples
             if X.shape != self.X0s.shape:
@@ -799,6 +1034,7 @@ class TransformerMLMProposal(MaskedSearchDistribution, _TransformerMLMMixin):
 
 
 class _TransformerMutationMixin(_TransformerMLMBackbone, _TestMixin):
+    """Mixin that augments the MLM backbone with a learned mask decoder."""
 
     def __init__(
         self,
@@ -927,7 +1163,39 @@ class _TransformerMutationMixin(_TransformerMLMBackbone, _TestMixin):
 class TransformerMutationProposal(
     MaskedSearchDistribution, _TransformerMutationMixin
 ):
-    """Masked Transformer model that learns how to mutate."""
+    """Masked Transformer model that learns mutation locations and values.
+
+    Parameters
+    ----------
+    d_features : int
+        Sequence length.
+    k_categories : int
+        Alphabet size.
+    num_mutations : int, default=10
+        Number of positions to mutate per sample.
+    X0 : Tensor, optional
+        Seed sequences to mutate from.
+    embedding_dim : int, optional
+        Token embedding dimension. Defaults to ``max(8, k//2) * nhead``.
+    nhead : int, default=2
+        Number of attention heads.
+    dim_feedforward : int, default=128
+        Hidden dimension of the feed-forward sublayers.
+    dropout : float, default=0.0
+        Dropout probability used across the transformer and mask decoder.
+    num_layers : int, default=1
+        Number of encoder layers.
+    mask_cnn_kernel : int, default=5
+        Kernel size of the 1D convolution used in the mask decoder (must be odd).
+    pad_token : int, optional
+        Token index treated as immutable.
+    replacement : bool, default=False
+        Whether mutations may keep the original token.
+    samples : int, default=100
+        Default number of samples returned by ``forward``.
+    clip_gradients : float, optional
+        Gradient clipping value applied during optimisation.
+    """
 
     prior_same_class = False  # Use the MLM as a prior
 
@@ -976,6 +1244,7 @@ class TransformerMutationProposal(
         self,
         sample_shape: torch.Size = torch.Size([1]),
     ) -> Tensor:
+        """Sample by selecting mutation sites and resampling masked tokens."""
         if len(sample_shape) > 1:
             raise ValueError("Sample shapes of dim > 1 not implemented.")
         samples = int(sample_shape[0])
@@ -984,6 +1253,7 @@ class TransformerMutationProposal(
         return Xs
 
     def log_prob(self, X: Tensor) -> Tensor:
+        """Return ``log q(X | X0)`` for the learnt mutation model."""
         if self.X0s is not None:  # Evaluate against previous samples
             if X.shape != self.X0s.shape:
                 raise ValueError(
@@ -1000,6 +1270,7 @@ class TransformerMutationProposal(
         return self._log_prob(X, X0)
 
     def _save_constructor_args(self, local_vars: Dict[str, Any]):
+        """Record constructor arguments from ``locals()`` for later reuse."""
         self._constructor_args = {
             k: v
             for k, v in local_vars.items()
@@ -1007,11 +1278,13 @@ class TransformerMutationProposal(
         }
 
     def get_constructor_args(self) -> Dict[str, Any]:
+        """Return a copy of the arguments used to instantiate the proposal."""
         if not hasattr(self, "_constructor_args"):
             raise ValueError("Consturctor arguments not saved!")
         return self._constructor_args.copy()
 
     def get_compatible_prior(self) -> TransformerMLMProposal:
+        """Instantiate a matching :class:`TransformerMLMProposal` prior."""
         kwargs = self.get_constructor_args()
         # Pop irrelevant items
         for i in ("mask_cnn_kernel", "num_mutations", "replacement"):
@@ -1036,7 +1309,7 @@ def fit_ml(
     callback: Optional[Callable[[int, Tensor, Tensor], None]] = None,
     seed: Optional[int] = None,
     val_proportion: float = 0,
-    augmenter: Optional[AugementGenerator] = None,
+    augmenter: Optional[AugmentGenerator] = None,
     augmentation_p: float = 0.1,
 ):
     """Fit a proposal distribution q(X) or q(X|X0) by maximum likelihood.
@@ -1067,7 +1340,7 @@ def fit_ml(
         If ``> 0``, withhold this proportion of data as a fixed validation set
         and report validation loss every iteration using the same held-out
         indices. Set to 0 to disable validation.
-    augmenter : Optional[AugementGenerator]
+    augmenter : Optional[AugmentGenerator]
         Optional data augmenter for marginal models.
     augmentation_p : float
         Proportion of each batch to replace with augmented samples when augmenter is provided.
@@ -1150,7 +1423,15 @@ def fit_ml(
 def clip_gradients(proposal_distribution: SearchDistribution):
     """Register per-parameter gradient clamp hooks once per module.
 
-    Avoids accumulating multiple hooks across repeated training loops.
+    Parameters
+    ----------
+    proposal_distribution : SearchDistribution
+        Proposal whose parameters will have gradient clamps applied.
+
+    Notes
+    -----
+    The hooks are set at most once per module to avoid accumulating duplicates
+    across repeated training loops.
     """
     cg = proposal_distribution.clip_gradients
     if cg is None:
@@ -1169,6 +1450,20 @@ def clip_gradients(proposal_distribution: SearchDistribution):
 
 
 def _rinit(shape: torch.Size | Sequence | int, features: int) -> Tensor:
+    """Uniform random initialisation symmetric around zero.
+
+    Parameters
+    ----------
+    shape : torch.Size | Sequence | int
+        Desired tensor shape.
+    features : int
+        Feature count used to set the scaling factor ``1 / sqrt(features)``.
+
+    Returns
+    -------
+    Tensor
+        Random tensor in ``[-scale, scale]`` where ``scale = features**-0.5``.
+    """
     scale = features ** (-0.5)
     init = torch.rand(shape) * 2 * scale - scale
     return init

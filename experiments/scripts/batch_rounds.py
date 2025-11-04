@@ -292,7 +292,6 @@ def run_experiment(
                 y,
                 refit=True,
                 optimizer_options=config["gp"]["optimisation"],
-                stop_options=config["gp"]["stop"],
                 device=device,
             )
         else:

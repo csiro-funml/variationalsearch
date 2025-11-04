@@ -24,7 +24,17 @@ class PreferenceDistribution(SearchDistribution):
 
 
 class EmpiricalPreferences(PreferenceDistribution):
-    """Empirical (resampling) distribution over a fixed set of preferences."""
+    """Empirical (resampling) distribution over a fixed set of preferences.
+
+    Parameters
+    ----------
+    U : Tensor, optional
+        Preference vectors stored row-wise. Must be set before sampling.
+    samples : int, default=100
+        Default number of samples returned by ``forward``.
+    clip_gradients : float, optional
+        Gradient clipping value applied during optimisation.
+    """
 
     def __init__(
         self,
@@ -39,23 +49,44 @@ class EmpiricalPreferences(PreferenceDistribution):
 
     @torch.no_grad()
     def sample(self, sample_shape: torch.Size = torch.Size([1])) -> Tensor:
+        """Resample preferences uniformly from the stored bank."""
         if self.U is None:
             raise ValueError("Preferences, U, must be set.")
         idx = torch.randint(low=0, high=self.n, size=sample_shape)
         return self.U[idx]
 
     def log_prob(self, X):
+        """Log-density is undefined for purely empirical resampling."""
         raise NotImplementedError(
             "Log probability not valid for empirical distribution."
         )
 
     def set_preferences(self, U: Tensor):
+        """Register the preference bank used during resampling."""
         self.n = len(U)
         self.U = U
 
 
 class UnitNormal(PreferenceDistribution):
-    """Isotropic-normal projected to the unit sphere (2+ dims)."""
+    """Isotropic normal projected to the unit sphere (2+ dims).
+
+    Parameters
+    ----------
+    dim : int
+        Dimensionality of the preference vectors.
+    loc : Tensor, optional
+        Mean direction before projection; defaults to a random unit vector.
+    scale : Tensor, optional
+        Standard deviation per dimension before projection. Defaults to ones.
+    samples : int, default=100
+        Default number of samples produced by ``forward``.
+    min_scale : float, default=1e-6
+        Lower bound applied to the standard deviation.
+    eps : float, default=1e-6
+        Epsilon used for stable normalisation.
+    clip_gradients : float, optional
+        Gradient clipping value applied during optimisation.
+    """
 
     def __init__(
         self,
@@ -78,11 +109,19 @@ class UnitNormal(PreferenceDistribution):
 
     @torch.no_grad()
     def sample(self, sample_shape=torch.Size([1])):
+        """Draw unit-norm samples by projecting a Gaussian to the sphere."""
         norm = self._make_normal()
         Us = fnn.normalize(norm.sample(sample_shape), p=2, dim=-1, eps=self.eps)
         return Us
 
     def log_prob(self, U: Tensor) -> Tensor:
+        """Compute a regularised log-score for unit vectors.
+
+        Notes
+        -----
+        Returns ``log p(U)`` under the projected normal minus a quadratic
+        penalty encouraging the mean direction to remain unit-normalised.
+        """
         U = fnn.normalize(U, p=2, dim=-1, eps=self.eps)
         norm = self._make_normal()
         logp = norm.log_prob(U)
@@ -91,13 +130,32 @@ class UnitNormal(PreferenceDistribution):
         return reward
 
     def _make_normal(self):
+        """Return the underlying multivariate normal prior to projection."""
         scale = torch.clamp(fnn.softplus(self.scale), min=self.min_scale)
         norm = td.Independent(td.Normal(loc=self.loc, scale=scale), 1)
         return norm
 
 
 class MixtureUnitNormal(PreferenceDistribution):
-    """Mixture of unit Normal distributions for directional preferences."""
+    """Mixture of projected Normal distributions for directional preferences.
+
+    Parameters
+    ----------
+    locs : Tensor
+        Component means with shape ``(K, D)``.
+    scales : Tensor, optional
+        Component scales matching ``locs``; defaults to ones.
+    weights : Tensor, optional
+        Mixture weights of shape ``(K,)``; defaults to uniform.
+    samples : int, default=100
+        Default number of samples produced by ``forward``.
+    min_scale : float, default=1e-6
+        Lower bound applied to standard deviations.
+    eps : float, default=1e-6
+        Epsilon used for stable normalisation.
+    clip_gradients : float, optional
+        Gradient clipping value applied during optimisation.
+    """
 
     def __init__(
         self,
@@ -133,11 +191,19 @@ class MixtureUnitNormal(PreferenceDistribution):
 
     @torch.no_grad()
     def sample(self, sample_shape: torch.Size = torch.Size([1])) -> Tensor:
+        """Sample unit vectors by mixing projected Gaussians."""
         mix = self._buildmix()
         Us = fnn.normalize(mix.sample(sample_shape), p=2, dim=-1, eps=self.eps)
         return Us
 
     def log_prob(self, U: Tensor) -> Tensor:
+        """Evaluate the regularised log-score of unit vectors under the mixture.
+
+        Notes
+        -----
+        Returns ``log p(U)`` under the projected mixture minus a penalty that
+        encourages component means to remain unit-normalised.
+        """
         # ensure unit vectors
         U = fnn.normalize(U, p=2, dim=-1, eps=self.eps)
         mix = self._buildmix()
@@ -148,6 +214,7 @@ class MixtureUnitNormal(PreferenceDistribution):
         return reward
 
     def _buildmix(self) -> td.Distribution:
+        """Construct the underlying mixture before projecting to the sphere."""
         scales = torch.clamp(fnn.softplus(self.scales), min=self.min_scale)
         comps = td.Independent(
             td.Normal(
@@ -164,7 +231,19 @@ class MixtureUnitNormal(PreferenceDistribution):
 
 
 class UnitVonMises(PreferenceDistribution):
-    """Wrapped von Mises on S1 (2D unit circle)."""
+    """Wrapped von Mises distribution on the 2D unit circle.
+
+    Parameters
+    ----------
+    loc : Tensor, optional
+        Mean direction on the unit circle. Defaults to ``[1/√2, 1/√2]``.
+    concentration : Tensor, optional
+        Concentration parameter ``κ``. Defaults to ``1e-2``.
+    samples : int, default=100
+        Default number of samples returned by ``forward``.
+    clip_gradients : float, optional
+        Gradient clipping value applied during optimisation.
+    """
 
     def __init__(
         self,
@@ -185,6 +264,7 @@ class UnitVonMises(PreferenceDistribution):
 
     @torch.no_grad()
     def sample(self, sample_shape=torch.Size([1])):
+        """Draw samples on the unit circle via a von Mises distribution."""
         vm = td.VonMises(
             loc=_radians(self.loc), concentration=fnn.softplus(self.conc)
         )
@@ -192,6 +272,7 @@ class UnitVonMises(PreferenceDistribution):
         return _cartesian(rs)
 
     def log_prob(self, U):
+        """Evaluate the log-density of unit-circle points under the von Mises."""
         if U.shape[1] != 2:
             raise ValueError("Von Mises only defined on 2-dimensional U!")
         r = _radians(U)
@@ -203,14 +284,19 @@ class UnitVonMises(PreferenceDistribution):
 
 
 class SphericalPreferenceFlow(PreferenceDistribution):
-    """Spherical Normalizing Flows.
+    """Spherical normalising flow preference model.
 
-    Rezende, D.J., Papamakarios, G., Racaniere, S., Albergo, M., Kanwar, G.,
-    Shanahan, P. and Cranmer, K., 2020, November. Normalizing flows on tori and
-    spheres. In International Conference on Machine Learning (pp. 8083-8092).
-    PMLR.
+    Implements the NCSF spherical flow of Rezende et al. (2020).
+    See https://zuko.readthedocs.io/stable/api/zuko.flows.spline.html
 
-    https://zuko.readthedocs.io/stable/api/zuko.flows.spline.html#zuko.flows.spline.NCSF
+    Parameters
+    ----------
+    dim : int
+        Dimensionality of the preference vectors.
+    hidden_features : int, default=64
+        Width of each hidden layer in the flow network.
+    num_layers : int, default=5
+        Number of autoregressive transforms.
     """
 
     def __init__(
@@ -234,15 +320,18 @@ class SphericalPreferenceFlow(PreferenceDistribution):
     def sample(
         self, sample_shape: torch.Size = torch.Size([1])
     ) -> torch.Tensor:
+        """Sample unit vectors from the learnt spherical flow."""
         samples = self.flow(None).sample(sample_shape)
         return fnn.normalize(samples, p=2, dim=-1)
 
     def log_prob(self, U: torch.Tensor) -> torch.Tensor:
+        """Evaluate the log-density of unit vectors under the flow."""
         U = fnn.normalize(U, p=2, dim=-1)
         return self.flow(None).log_prob(U)
 
 
 def _radians(cartesian: Tensor) -> Tensor:
+    """Convert 2D Cartesian coordinates to angles in radians."""
     if cartesian.shape[1] > 2:
         raise ValueError("Can only convert x.shape[1] == 2 to radians!")
     r = torch.atan2(cartesian[:, 1], cartesian[:, 0]).float()
@@ -250,5 +339,6 @@ def _radians(cartesian: Tensor) -> Tensor:
 
 
 def _cartesian(radians: Tensor) -> Tensor:
+    """Map radians on the unit circle back to 2D Cartesian coordinates."""
     x = torch.hstack([torch.cos(radians), torch.sin(radians)]).float()
     return x

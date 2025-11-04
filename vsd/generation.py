@@ -57,7 +57,7 @@ def generate_candidates_reinforce(
     optimizer_options: Optional[Dict[str, Union[float, str]]] = None,
     stop_options: Optional[Dict[str, Union[float, str]]] = None,
     callback: Optional[
-        Callable[[int, Tensor, List[Tensor | None]], NoReturn]
+        Callable[[int, Tensor, List[Tensor | None]], None]
     ] = None,
     timeout_sec: Optional[float] = None,
     gradient_samples: Optional[int] = None,
@@ -84,6 +84,7 @@ def generate_candidates_reinforce(
         ``min_delta``).
     callback : callable, optional
         Function ``callback(iteration, loss, gradients)`` invoked each step.
+        The return value is ignored.
     timeout_sec : float, optional
         Wall-clock timeout for optimisation; returns best found upon expiry.
     gradient_samples : int, optional
@@ -168,7 +169,7 @@ def generate_candidates_iw(
     optimizer_options: Optional[Dict[str, Union[float, str]]] = None,
     stop_options: Optional[Dict[str, Union[float, str]]] = None,
     callback: Optional[
-        Callable[[int, Tensor, List[Tensor | None]], NoReturn]
+        Callable[[int, Tensor, List[Tensor | None]], None]
     ] = None,
     timeout_sec: Optional[float] = None,
     gradient_samples: Optional[int] = None,
@@ -192,6 +193,7 @@ def generate_candidates_iw(
         Keyword arguments for :class:`SEPlateauStopping`.
     callback : callable, optional
         Function ``callback(iteration, loss, gradients)`` invoked each step.
+        The return value is ignored.
     timeout_sec : float, optional
         Wall-clock timeout for optimisation; returns best found upon expiry.
     gradient_samples : int, optional

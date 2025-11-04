@@ -116,7 +116,6 @@ def train_surrogate(config, logdir, dataset, device):
         surrogates.fit_gp(
             gp,
             optimiser_options=config["gp"]["optimisation"],
-            stop_options=config["gp"]["stop"],
             device=device,
         )
         eys = gp(Xs.to(device)).mean.detach().numpy()
@@ -142,7 +141,6 @@ def train_surrogate(config, logdir, dataset, device):
     surrogates.fit_gp(
         gp,
         optimiser_options=config["gp"]["optimisation"],
-        stop_options=config["gp"]["stop"],
         callback=callback,
         device=device,
     )

@@ -115,7 +115,19 @@ class IndexGP(GPyTorchModel, ExactGP):
 
 
 class IBNN(GPyTorchModel, ExactGP):
-    """Infinite-width BNN kernel GP for sequences."""
+    """Infinite-width BNN kernel GP for sequences.
+
+    Parameters
+    ----------
+    seq_len : int
+        Sequence length.
+    alpha_len : int
+        Alphabet size.
+    X, y : Tensor
+        Training data.
+    depth : int, optional
+        Depth parameter of the InfiniteWidthBNNKernel.
+    """
 
     num_outputs = 1
 
@@ -146,6 +158,7 @@ class IBNN(GPyTorchModel, ExactGP):
 
 
 def _onehot_kernel(kernelclass: Kernel, num_classes: int) -> Kernel:
+    """Wrap a kernel to operate on integer-encoded categorical sequences."""
 
     class _CategoricalInputs(kernelclass):
 
@@ -166,16 +179,23 @@ def _onehot_kernel(kernelclass: Kernel, num_classes: int) -> Kernel:
 def fit_gp(
     model: GPyTorchModel,
     optimiser_options: Optional[Dict[str, Any]] = None,
-    stop_options: Optional[Dict[str, Any]] = None,
     device: str = "cpu",
     callback: Optional[Callable[[Tensor, OptimizationResult], None]] = None,
 ):
-    """Fit a GP by maximising the exact marginal log-likelihood (scipy).
+    """Fit a GP by maximising the exact marginal log-likelihood via SciPy.
 
-    Parameters mirror ``botorch.fit_gpytorch_mll_scipy``.
+    Parameters
+    ----------
+    model : GPyTorchModel
+        GP model (with likelihood) to train in-place.
+    optimiser_options : dict, optional
+        Keyword arguments forwarded to ``fit_gpytorch_mll_scipy``.
+    device : str, default="cpu"
+        Device on which to perform optimisation.
+    callback : callable, optional
+        Optional hook passed to the optimiser.
     """
     optimiser_options = {} if optimiser_options is None else optimiser_options
-    stop_options = {} if stop_options is None else stop_options
 
     model.to(device)
     model.train()
@@ -193,10 +213,26 @@ def update_gp(
     device: str = "cpu",
     refit: bool = False,
     optimizer_options: Optional[Dict[str, Any]] = None,
-    stop_options: Optional[Dict[str, Any]] = None,
     callback: Optional[Callable[[Tensor, OptimizationResult], None]] = None,
 ):
-    """Update training data for a fitted GP and optionally refit hyperparams."""
+    """Update training data for a fitted GP and optionally refit hyperparams.
+
+    Parameters
+    ----------
+    model : GPyTorchModel
+        GP surrogate previously fitted.
+    X, y : Tensor
+        New training inputs and targets.
+    device : str, default="cpu"
+        Device on which to update data/refit.
+    refit : bool, default=False
+        If ``True`` re-optimise hyperparameters after updating the dataset.
+    optimizer_options : dict, optional
+        Keyword arguments passed through to ``fit_gp`` when ``refit`` is
+        ``True``.
+    callback : callable, optional
+        Optional hook forwarded to ``fit_gp``.
+    """
     model.set_train_data(
         inputs=X.to(device), targets=y.to(device), strict=False
     )
@@ -204,7 +240,6 @@ def update_gp(
         fit_gp(
             model=model,
             optimiser_options=optimizer_options,
-            stop_options=stop_options,
             device=device,
             callback=callback,
         )

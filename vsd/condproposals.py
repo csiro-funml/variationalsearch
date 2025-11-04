@@ -54,6 +54,20 @@ class ConditionalSearchDistribution(torch.nn.Module, ABC):
         self.clip_gradients = clip_gradients
 
     def forward(self, U: Tensor) -> Tuple[Tensor, Tensor]:
+        """Draw samples for the provided contexts and return their log-density.
+
+        Parameters
+        ----------
+        U : Tensor, shape ``(N, ...)``
+            Conditioning inputs. The leading batch size determines how many
+            samples are drawn.
+
+        Returns
+        -------
+        tuple[Tensor, Tensor]
+            Pair ``(X, logqXU)`` where ``X`` are samples from ``q(X|U)`` and
+            ``logqXU`` are per-sample log-probabilities.
+        """
         with torch.no_grad():
             Xs = self.sample(U)
         logqX = self.log_prob(Xs, U)
@@ -61,11 +75,11 @@ class ConditionalSearchDistribution(torch.nn.Module, ABC):
 
     @abstractmethod
     def sample(self, U: Tensor) -> Tensor:
-        pass
+        """Generate samples conditioned on ``U``."""
 
     @abstractmethod
     def log_prob(self, X: Tensor, U: Tensor) -> Tensor:
-        pass
+        """Evaluate ``log q(X|U)`` for a batch of pairs."""
 
     @abstractmethod
     def get_compatible_prior(
@@ -73,6 +87,7 @@ class ConditionalSearchDistribution(torch.nn.Module, ABC):
     ) -> SearchDistribution | torch.distributions.Distribution: ...
 
     def _save_constructor_args(self, local_vars: Dict[str, Any]):
+        """Record constructor arguments from ``locals()`` for later reuse."""
         self._constructor_args = {
             k: v
             for k, v in local_vars.items()
@@ -80,12 +95,13 @@ class ConditionalSearchDistribution(torch.nn.Module, ABC):
         }
 
     def get_constructor_args(self) -> Dict[str, Any]:
+        """Return a copy of the arguments used to instantiate the proposal."""
         if not hasattr(self, "_constructor_args"):
             raise ValueError("Consturctor arguments not saved!")
         return self._constructor_args.copy()
 
     def set_dropout_p(self, p: float):
-        """Reset dropout p -- useful for multiple training steps."""
+        """Reset dropout probability on all contained modules."""
         for m in self.modules():
             if isinstance(m, torch.nn.Dropout):
                 m.p = p
@@ -98,7 +114,19 @@ class ConditionalSearchDistribution(torch.nn.Module, ABC):
 
 
 class PreferenceSearchDistribution(SearchDistribution):
-    """Joint search distribution with stochastic preferences ``q(X, U)``."""
+    """Joint search distribution with stochastic preferences ``q(X, U)``.
+
+    Parameters
+    ----------
+    cproposal : ConditionalSearchDistribution
+        Conditional proposal providing ``q(X|U)``.
+    preference : PreferenceDistribution
+        Distribution over preferences ``q(U)``.
+    samples : int, default=100
+        Default number of joint samples returned by ``forward``.
+    clip_gradients : float, optional
+        Gradient clipping value applied during optimisation.
+    """
 
     def __init__(
         self,
@@ -114,6 +142,7 @@ class PreferenceSearchDistribution(SearchDistribution):
     def forward(
         self, samples: Optional[int] = None
     ) -> Tuple[Tensor, Tensor, Tensor]:
+        """Return samples ``(X, U)`` and their conditional log-density."""
         samples = self.samples if samples is None else samples
         Xs, Us = self.sample(torch.Size([samples]))
         logqX = self.log_prob(Xs, Us)
@@ -129,7 +158,7 @@ class PreferenceSearchDistribution(SearchDistribution):
         return Xs, Us
 
     def log_prob(self, X: Tensor, U: Tensor) -> Tensor:
-        """Only return conditional log q(X|U)."""
+        """Return the conditional log-density ``log q(X|U)``."""
         return self.cproposal.log_prob(X, U)
 
     def train(self, mode=True):
@@ -153,7 +182,22 @@ class PreferenceSearchDistribution(SearchDistribution):
 class ConditionalContinuousSearchDistribution(
     ConditionalSearchDistribution, _TestMixin
 ):
-    """Continuous conditional proposals with optional x-transform hooks."""
+    """Continuous conditional proposals with optional transform hooks.
+
+    Parameters
+    ----------
+    u_dims : int
+        Dimensionality of the conditioning vector ``U``.
+    x_transform : Callable[[Tensor], Tensor], optional
+        Forward transform applied to inputs before evaluating the base
+        distribution (e.g. normalising flow preprocessing).
+    x_invtransform : Callable[[Tensor], Tensor], optional
+        Inverse transform applied to samples drawn from the base distribution.
+    samples : int, default=100
+        Default number of samples produced by ``forward``.
+    clip_gradients : float, optional
+        Gradient clipping value applied during optimisation.
+    """
 
     def __init__(
         self,
@@ -172,6 +216,7 @@ class ConditionalContinuousSearchDistribution(
 
     @torch.no_grad()
     def sample(self, U: Tensor) -> Tensor:
+        """Draw samples from ``q(X|U)`` (optionally inverse-transforming)."""
         q = self._construct_q(U)
         Xs = q.sample()
 
@@ -185,13 +230,14 @@ class ConditionalContinuousSearchDistribution(
         return Xs
 
     def log_prob(self, X: Tensor, U: Tensor) -> Tensor:
+        """Evaluate ``log q(X|U)`` applying ``x_transform`` when configured."""
         if self.x_transform is not None:
             X = self.x_transform(X)
         q = self._construct_q(U)
         return q.log_prob(X)
 
     def set_dropout_p(self, p: float):
-        """Reset dropout p -- useful for multiple training steps."""
+        """Reset dropout probability on all contained modules."""
         for m in self.modules():
             if isinstance(m, torch.nn.Dropout):
                 m.p = p
@@ -201,7 +247,23 @@ class ConditionalContinuousSearchDistribution(
 
 
 class _MLPConditioner(nn.Module):
-    """Shared MLP conditioner backbone mapping ``U → params``."""
+    """Shared MLP conditioner backbone mapping ``U → params``.
+
+    Parameters
+    ----------
+    u_dims : int
+        Dimensionality of the conditioning input.
+    latent_dim : int
+        Hidden width of the intermediate representation.
+    out_dim : int
+        Dimension of the output parameter vector.
+    bias : bool, default=False
+        Whether to include biases in all linear layers.
+    hidden_layers : int, default=1
+        Number of residual blocks after the input layer.
+    dropout : float, default=0.0
+        Dropout probability applied after the first activation.
+    """
 
     def __init__(
         self,
@@ -238,6 +300,7 @@ class _MLPConditioner(nn.Module):
         )
 
     def forward(self, U: Tensor) -> Tensor:
+        """Return conditioner outputs for batch of contexts ``U``."""
         return self.net(U)
 
 
@@ -405,7 +468,21 @@ class ConditionalGMMProposal(ConditionalContinuousSearchDistribution):
 
 
 class SequenceCondSearchDistribution(ConditionalSearchDistribution):
-    """Abstract base for conditional autoregressive sequence proposals."""
+    """Abstract base for conditional autoregressive sequence proposals.
+
+    Parameters
+    ----------
+    d_features : int
+        Sequence length.
+    k_categories : int
+        Alphabet size.
+    u_dims : int
+        Dimensionality of the conditioning vector ``U``.
+    samples : int, default=100
+        Default number of samples produced by ``forward``.
+    clip_gradients : float, optional
+        Gradient clipping value applied during optimisation.
+    """
 
     def __init__(
         self,
@@ -427,6 +504,13 @@ class FiLM(torch.nn.Module):
 
     Given a context ``U``, produces per-feature ``(gamma, beta)`` to modulate
     embeddings as ``e' = e * (1 + gamma) + beta``.
+
+    Parameters
+    ----------
+    u_dims : int
+        Dimensionality of the context vector ``U``.
+    embedding_dim : int
+        Embedding dimension to modulate.
     """
 
     def __init__(self, u_dims: int, embedding_dim: int):
@@ -456,18 +540,35 @@ class FiLM(torch.nn.Module):
         )
 
     def forward(self, U: Tensor) -> Tuple[Tensor, Tensor]:
+        """Return broadcastable ``(gamma, beta)`` modulation tensors."""
         gam = self.gamma(U).unsqueeze(1)
         bet = self.beta(U).unsqueeze(1)
         return gam, bet
 
 
 class CondLSTMProposal(SequenceCondSearchDistribution, _LSTMMixin):
-    """Conditional LSTM Proposal for sequences, q(X|U).
+    """Conditional LSTM proposal ``q(X|U)`` with FiLM conditioning.
 
-    Uses FiLM for conditioning:
-        Perez, E., Strub, F., de Vries, H., Dumoulin, V., & Courville, A.
-        "FiLM: Visual Reasoning with a General Conditioning Layer."
-        AAAI Conference on Artificial Intelligence (AAAI), 2018.
+    Parameters
+    ----------
+    d_features : int
+        Sequence length.
+    k_categories : int
+        Alphabet size.
+    u_dims : int
+        Dimensionality of the conditioning vector ``U``.
+    embedding_dim : int, optional
+        Token embedding dimension. Defaults to ``max(8, k//2)``.
+    hidden_size : int, optional
+        Hidden size of the LSTM; defaults to ``8 * embedding_dim``.
+    num_layers : int, default=1
+        Number of stacked LSTM layers.
+    dropout : float, default=0.0
+        Dropout probability applied between LSTM layers.
+    samples : int, default=100
+        Default number of samples returned by ``forward``.
+    clip_gradients : float, optional
+        Gradient clipping value applied during optimisation.
     """
 
     def __init__(
@@ -511,6 +612,7 @@ class CondLSTMProposal(SequenceCondSearchDistribution, _LSTMMixin):
         return self.e0
 
     def sample(self, U: Tensor) -> Tensor:
+        """Sample sequences conditioned on ``U`` using the FiLM-modulated LSTM."""
         self.gam, self.bet = self.film(U)
         self.e0 = self.u0(U)
         sample_shape = torch.Size([len(U)])
@@ -518,11 +620,13 @@ class CondLSTMProposal(SequenceCondSearchDistribution, _LSTMMixin):
         return Xs
 
     def log_prob(self, X: Tensor, U: Tensor) -> Tensor:
+        """Evaluate ``log q(X|U)`` under the conditioned LSTM."""
         self.gam, self.bet = self.film(U)
         self.e0 = self.u0(U)
         return self._log_prob(X)
 
     def get_compatible_prior(self) -> LSTMProposal:
+        """Instantiate an unconditional ``LSTMProposal`` sharing architecture."""
         kwargs = self.get_constructor_args()
         # Pop irrelevant items
         kwargs.pop("u_dims")
@@ -532,7 +636,31 @@ class CondLSTMProposal(SequenceCondSearchDistribution, _LSTMMixin):
 class CondDTransformerProposal(
     SequenceCondSearchDistribution, _DTransformerMixin
 ):
-    """Decoder-only conditional transformer search distribution, q(X|U)."""
+    """Decoder-only conditional transformer search distribution ``q(X|U)``.
+
+    Parameters
+    ----------
+    d_features : int
+        Sequence length.
+    k_categories : int
+        Alphabet size.
+    u_dims : int
+        Dimensionality of the conditioning vector ``U``.
+    embedding_dim : int, optional
+        Token embedding dimension. Defaults to ``max(8, k//2) * nhead``.
+    nhead : int, default=2
+        Number of attention heads.
+    dim_feedforward : int, default=128
+        Hidden dimension of the feed-forward sublayers.
+    dropout : float, default=0.0
+        Dropout probability used across the transformer stack.
+    num_layers : int, default=1
+        Number of decoder blocks.
+    samples : int, default=100
+        Default number of samples returned by ``forward``.
+    clip_gradients : float, optional
+        Gradient clipping value applied during optimisation.
+    """
 
     def __init__(
         self,
@@ -580,6 +708,7 @@ class CondDTransformerProposal(
         return self.e0
 
     def sample(self, U: Tensor) -> Tensor:
+        """Sample sequences conditioned on ``U`` using the decoder-only transformer."""
         self.gam, self.bet = self.film(U)
         self.e0 = self.u0(U)
         sample_shape = torch.Size([len(U)])
@@ -587,11 +716,13 @@ class CondDTransformerProposal(
         return Xs
 
     def log_prob(self, X: Tensor, U: Tensor) -> Tensor:
+        """Evaluate ``log q(X|U)`` under the conditioned transformer."""
         self.gam, self.bet = self.film(U)
         self.e0 = self.u0(U)
         return self._log_prob(X)
 
     def get_compatible_prior(self) -> DTransformerProposal:
+        """Instantiate an unconditional ``DTransformerProposal`` where applicable."""
         kwargs = self.get_constructor_args()
         # Pop irrelevant items
         kwargs.pop("u_dims")
@@ -599,7 +730,29 @@ class CondDTransformerProposal(
 
 
 class CondMutationProposal(SequenceCondSearchDistribution):
-    """Conditional mutation proposal for sequences, q(X|U)."""
+    """Conditional mutation proposal for sequences ``q(X|U)``.
+
+    Parameters
+    ----------
+    d_features : int
+        Sequence length.
+    k_categories : int
+        Alphabet size.
+    u_dims : int
+        Dimensionality of the conditioning vector ``U``.
+    X0 : Tensor, optional
+        Seed sequences used as bases for mutations.
+    U0 : Tensor, optional
+        Conditioning vectors paired with ``X0``.
+    num_mutations : int, default=10
+        Number of positions to mutate per sample.
+    max_seq_align_dist : int, optional
+        Maximum alignment distance when matching seeds (implementation-specific).
+    clip_gradients : float, optional
+        Gradient clipping value applied during optimisation.
+    samples : int, default=1
+        Default number of samples drawn during ``forward``.
+    """
 
     def __init__(
         self,
@@ -634,11 +787,13 @@ class CondMutationProposal(SequenceCondSearchDistribution):
     def log_prob(self, X: Tensor, U: Tensor) -> Tensor: ...
 
     def set_seeds(self, X0: Tensor, U0: Tensor):
+        """Register seed sequences and associated contexts."""
         self.X0 = X0
         self.U0 = U0
         self.X0s = None
 
     def clear_seeds(self):
+        """Remove cached seeds to force re-selection on the next call."""
         self.X0 = None
         self.U0 = None
         self.X0s = None
@@ -653,7 +808,7 @@ class CondMutationProposal(SequenceCondSearchDistribution):
 
     @torch.no_grad()
     def _match_seeds(self, U: Tensor) -> Tensor:
-        """Get seeds, X0, that have U0 most similar to U"""
+        """Return seeds whose stored contexts are closest to ``U``."""
         X0, U0 = self._check_seeds()
         idxs = torch.argmax(U @ U0.T, dim=1)
         self.X0s = X0[idxs]
@@ -663,43 +818,42 @@ class CondMutationProposal(SequenceCondSearchDistribution):
 class CondTransformerMutationProposal(
     CondMutationProposal, _TransformerMutationMixin
 ):
-    """
-    Conditional transformer mutation proposal distribution, q(X|U).
-
-    Combines `CondMutationProposal` and `TransformerMutationMixin` to generate
-    mutation proposals for sequences conditioned on preference vectors U.
-    Supports an optional `pad_token` to prevent mutations at padded positions.
+    """Conditional transformer mutation proposal ``q(X|U)``.
 
     Parameters
     ----------
     d_features : int
-        Length of the sequence (number of features).
+        Sequence length.
     k_categories : int
-        Number of possible token categories.
+        Alphabet size.
     u_dims : int
-        Dimensionality of the conditioning preference vector U.
-    X0 : Optional[Tensor], default=None
-        Initial sequence(s) used as the base for mutations.
-    U0 : Optional[Tensor], default=None
-        Initial directions(s) associated with X0.
+        Dimensionality of the conditioning vector ``U``.
+    X0 : Tensor, optional
+        Seed sequences used as bases for mutations.
+    U0 : Tensor, optional
+        Conditioning vectors paired with ``X0``.
     num_mutations : int, default=10
-        Number of mutations to apply per sample.
-    embedding_dim : Optional[int]
-        Dimension of token embeddings.
+        Number of positions to mutate per sample.
+    embedding_dim : int, optional
+        Token embedding dimension. Defaults to ``max(8, k//2) * nhead``.
     nhead : int, default=2
-        Number of attention heads in the transformer.
+        Number of attention heads.
     dim_feedforward : int, default=128
-        Dimension of the feedforward network in transformer layers.
+        Hidden dimension of the feed-forward sublayers.
     dropout : float, default=0.0
-        Dropout probability between transformer layers.
+        Dropout probability used across the transformer stack.
     num_layers : int, default=1
-        Number of transformer encoder layers.
-    pad_token : Optional[int], default=None
-        Token index reserved for padding; padded positions will not be mutated.
-    clip_gradients : Optional[float], default=None
-        Maximum gradient norm for clipping updates.
+        Number of encoder layers in the mutation backbone.
+    mask_cnn_kernel : int, default=5
+        Kernel size of the convolution in the mask decoder (must be odd).
+    pad_token : int, optional
+        Token index treated as immutable.
+    replacement : bool, default=True
+        Whether sampled mutations may keep the original token.
+    clip_gradients : float, optional
+        Gradient clipping value applied during optimisation.
     samples : int, default=1
-        Number of samples drawn when sampling mutations.
+        Default number of samples produced by ``forward``.
     """
 
     def __init__(
@@ -751,12 +905,14 @@ class CondTransformerMutationProposal(
 
     @torch.no_grad()
     def sample(self, U: Tensor) -> Tensor:
+        """Sample mutated sequences conditioned on ``U``."""
         X0s = self._match_seeds(U)
         self.gam, self.bet = self.film(U)
         self.e0 = self.u0(U)
         return self._sample(X0s)
 
     def log_prob(self, X: Tensor, U: Tensor) -> Tensor:
+        """Evaluate ``log q(X|U)`` for the learnt mutation model."""
         if self.X0s is not None:  # Evaluate against previous samples
             if X.shape != self.X0s.shape:
                 raise ValueError(
@@ -775,6 +931,7 @@ class CondTransformerMutationProposal(
         return self._log_prob(X, X0)
 
     def _change_embeddings(self, e: Tensor) -> Tensor:
+        """Apply FiLM modulation to embeddings before decoding."""
         e = e * (1 + self.gam) + self.bet
         return e
 
@@ -782,6 +939,7 @@ class CondTransformerMutationProposal(
         return self.e0
 
     def get_compatible_prior(self) -> TransformerMLMProposal:
+        """Instantiate a matching unconditional ``TransformerMLMProposal``."""
         kwargs = self.get_constructor_args()
         # Pop irrelevant items
         for i in (

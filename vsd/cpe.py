@@ -43,13 +43,27 @@ class ClassProbabilityModel(ABC, nn.Module):
         pass
 
     def forward(self, X: Tensor, return_logits: bool = False) -> Tensor:
+        """Evaluate the model on ``X`` and return log-probabilities by default.
+
+        Parameters
+        ----------
+        X : Tensor
+            Input designs. Extra singleton dims are tolerated.
+        return_logits : bool, default=False
+            If ``True`` return raw logits instead of log-sigmoid values.
+
+        Returns
+        -------
+        Tensor
+            Log-probabilities ``log p(z=1|x)`` or logits when requested.
+        """
         logits = squeeze_1D(self._logits(X))
         if return_logits:
             return logits
         return nn.functional.logsigmoid(logits)
 
     def set_dropout_p(self, p: float):
-        """Reset dropout p -- useful for multiple training steps."""
+        """Reset dropout probability on all contained dropout modules."""
         for m in self.modules():
             if isinstance(m, torch.nn.Dropout):
                 m.p = p
@@ -69,20 +83,46 @@ class PreferenceClassProbabilityModel(ABC, nn.Module):
     def forward(
         self, X: Tensor, U: Tensor, return_logits: bool = False
     ) -> Tensor:
+        """Evaluate the model on ``(X, U)`` pairs.
+
+        Parameters
+        ----------
+        X : Tensor
+            Candidate designs.
+        U : Tensor
+            Preference or context vectors broadcastable with ``X``.
+        return_logits : bool, default=False
+            If ``True`` return logits instead of log-probabilities.
+
+        Returns
+        -------
+        Tensor
+            Log-probabilities ``log p(z=1|x, u)`` or logits when requested.
+        """
         logits = squeeze_1D(self._logits(X, U))
         if return_logits:
             return logits
         return nn.functional.logsigmoid(logits)
 
     def set_dropout_p(self, p: float):
-        """Reset dropout p -- useful for multiple training steps."""
+        """Reset dropout probability on all contained dropout modules."""
         for m in self.modules():
             if isinstance(m, torch.nn.Dropout):
                 m.p = p
 
 
 class EnsembleProbabilityModel(ClassProbabilityModel):
-    """Simple deep ensemble wrapper averaging base-model probabilities."""
+    """Deep ensemble wrapper averaging base-model probabilities.
+
+    Parameters
+    ----------
+    base_class : type[ClassProbabilityModel]
+        Model class to instantiate for each ensemble member.
+    init_kwargs : dict
+        Keyword arguments passed to ``base_class`` on construction.
+    ensemble_size : int, default=10
+        Number of ensemble members.
+    """
 
     def __init__(
         self,
@@ -157,7 +197,21 @@ class ContinuousCPEModel(ClassProbabilityModel):
 
 
 class PreferenceContinuousCPE(PreferenceClassProbabilityModel):
-    """Continuous CPE conditioned on a preference vector ``U``."""
+    """Continuous CPE conditioned on a preference vector ``U``.
+
+    Parameters
+    ----------
+    x_dim : int
+        Dimensionality of the design input.
+    u_dims : int
+        Dimensionality of the conditioning vector.
+    latent_dim : int
+        Hidden width of the underlying MLP.
+    dropoutp : float, default=0
+        Dropout probability.
+    hidden_layers : int, default=2
+        Number of residual hidden blocks.
+    """
 
     def __init__(
         self,
@@ -185,7 +239,15 @@ class PreferenceContinuousCPE(PreferenceClassProbabilityModel):
 
 
 class SequenceProbabilityModel(ClassProbabilityModel):
-    """Base for sequence CPEs with fixed length and alphabet size."""
+    """Base for sequence CPEs with fixed length and alphabet size.
+
+    Parameters
+    ----------
+    seq_len : int
+        Sequence length.
+    alpha_len : int
+        Alphabet size.
+    """
 
     def __init__(self, seq_len, alpha_len) -> None:
         super().__init__()
@@ -194,7 +256,21 @@ class SequenceProbabilityModel(ClassProbabilityModel):
 
 
 class NNClassProbability(SequenceProbabilityModel):
-    """Simple embedding + MLP CPE for sequences."""
+    """Simple embedding + MLP CPE for sequences.
+
+    Parameters
+    ----------
+    seq_len : int
+        Sequence length.
+    alpha_len : int
+        Alphabet size.
+    embedding_dim : int, optional
+        Token embedding dimension. Defaults to ``max(2, alpha_len//2)``.
+    dropoutp : float, default=0
+        Dropout probability.
+    hlsize : int, default=64
+        Hidden layer width of the MLP head.
+    """
 
     def __init__(
         self,
@@ -233,6 +309,7 @@ def _make_sequence_cnn(
     xkernel: int,
     xstride: int,
 ) -> torch.nn.Module:
+    """Return a 1D CNN feature extractor for sequence inputs."""
     if ckernel % 2 == 0:
         raise ValueError("ckernel can only be odd.")
 
@@ -290,8 +367,32 @@ def _make_sequence_cnn(
 class CNNClassProbability(SequenceProbabilityModel):
     """CNN CPE for sequences.
 
-    Receptive field = (ckernel - 1) * (1 + xstride) + xkernel
-    The default is 15.
+    Parameters
+    ----------
+    seq_len : int
+        Sequence length.
+    alpha_len : int
+        Alphabet size.
+    embedding_dim : int, optional
+        Token embedding dimension. Defaults to ``max(8, alpha_len // 2)``.
+    ckernel : int, default=5
+        Convolution kernel width (must be odd).
+    xkernel : int, default=3
+        Pooling kernel size in the temporal aggregator.
+    xstride : int, default=2
+        Pooling stride controlling receptive field.
+    cfilter_size : int, default=64
+        Number of filters in the convolutional layer.
+    linear_size : int, default=128
+        Hidden dimension of the MLP head.
+    dropoutp : float, default=0.2
+        Dropout probability applied in the CNN.
+    pos_encoding : bool, default=True
+        Whether to add sinusoidal positional encodings.
+
+    Notes
+    -----
+    The effective receptive field is ``(ckernel - 1) * (1 + xstride) + xkernel``.
     """
 
     def __init__(
@@ -331,11 +432,36 @@ class CNNClassProbability(SequenceProbabilityModel):
 
 
 class PreferenceCNNClassProbability(PreferenceClassProbabilityModel):
-    """
-    Preference-conditioned CNN class probability model.
+    """Preference-conditioned CNN class probability model.
 
-    Receptive field = (ckernel - 1) * (1 + xstride) + xkernel
-    The default is 15.
+    Parameters
+    ----------
+    seq_len : int
+        Sequence length.
+    alpha_len : int
+        Alphabet size.
+    u_dims : int
+        Dimensionality of the conditioning vector.
+    embedding_dim : int, optional
+        Token embedding dimension. Defaults to ``max(8, alpha_len//2)``.
+    ckernel : int, default=5
+        Convolution kernel width (must be odd).
+    xkernel : int, default=3
+        Pooling kernel size for the downstream temporal pooling.
+    xstride : int, default=2
+        Pooling stride.
+    cfilter_size : int, default=64
+        Number of filters in the convolutional layers.
+    linear_size : int, default=128
+        Hidden dimension of the MLP head.
+    dropoutp : float, default=0.2
+        Dropout probability applied in the CNN.
+    pos_encoding : bool, default=True
+        Whether to add sinusoidal positional encodings.
+
+    Notes
+    -----
+    The effective receptive field is ``(ckernel - 1) * (1 + xstride) + xkernel``.
     """
 
     def __init__(
@@ -398,6 +524,20 @@ def make_contrastive_alignment_data_random(
     Returns (Xa, Ua, za) where positives are (x_i, u_i) and negatives are
     (x_i, u_{p(i)}) with p a derangement. Repeats `negative_replicates` times.
 
+    Parameters
+    ----------
+    X : Tensor
+        Design matrix of shape ``(N, Dx)``.
+    U : Tensor
+        Preference/context matrix of shape ``(N, Du)``.
+    negative_replicates : int, default=9
+        Number of negative replicates created via derangements.
+
+    Returns
+    -------
+    Xa, Ua, za : Tensor
+        Augmented designs, preferences, and binary labels stacked column-wise.
+
     Shapes
     ------
     Xa : ((1 + negative_replicates) * N, Dx)
@@ -437,6 +577,22 @@ def make_contrastive_alignment_data_knn(
     (cosine) preferences to u_i, excluding i. Repeat `negative_replicates` times.
 
     Shapes are the same as `make_contrastive_alignment_data_random`.
+
+    Parameters
+    ----------
+    X : Tensor
+        Design matrix of shape ``(N, Dx)``.
+    U : Tensor
+        Preference/context matrix of shape ``(N, Du)``.
+    negative_replicates : int, default=9
+        Number of negative replicates drawn from KNN candidates.
+    knn_k : int, default=10
+        Number of nearest neighbours considered for each sample.
+
+    Returns
+    -------
+    Xa, Ua, za : Tensor
+        Augmented designs, preferences, and binary labels stacked column-wise.
     """
     device = X.device
     N = U.size(0)
@@ -532,53 +688,47 @@ def fit_cpe(
     seed: Optional[int] = None,
     stop_using_val_loss: bool = False,
 ):
-    """
-    Fit a Class Probability Estimator using labels derived from a threshold.
+    """Fit a class-probability estimator using raw targets and a labeller.
 
     Parameters
     ----------
     model : ClassProbabilityModel
-        A neural network model or similar implementing the CPE interface.
-    X : torch.Tensor
-        Training input tensor of shape (N, D).
-    y : torch.Tensor
-        Target values for training inputs, of shape (N,).
-    labeller : float, callable or Labeller
-        Threshold used to define positive class labels. If a `Threshold`
-        instance is provided, it is used directly to binarize `y`.
-    X_val : torch.Tensor, optional
-        Optional validation input tensor of shape (N_val, D).
-    y_val : torch.Tensor, optional
-        Optional validation targets of shape (N_val,).
+        Estimator to train in-place.
+    X : Tensor
+        Training inputs of shape ``(N, Dx)``.
+    y : Tensor
+        Raw targets used to define positives via ``labeller``.
+    labeller : float | callable | Labeller
+        Threshold or callable converting ``y`` to binary targets.
+    U : Tensor, optional
+        Optional preferences when forwarding through preference-aware models.
+    X_val : Tensor, optional
+        Validation inputs.
+    y_val : Tensor, optional
+        Validation raw targets.
+    U_val : Tensor, optional
+        Validation preferences.
     batch_size : int, default=32
-        Batch size used for stochastic optimization.
+        Minibatch size.
     optimizer : torch.optim.Optimizer, default=torch.optim.AdamW
-        Optimizer class to use for training.
+        Optimizer class to instantiate.
     optimizer_options : dict, optional
-        Dictionary of keyword arguments passed to the optimizer.
+        Keyword arguments passed to the optimizer constructor.
     stop_options : dict, optional
-        Dictionary of keyword arguments passed to `ExpMAStoppingCriterion` for
-        early stopping.
+        Keyword arguments for ``SEPlateauStopping``.
     device : str, default="cpu"
-        Device to use for model training (e.g., "cpu" or "cuda").
+        Device on which to run training.
     callback : callable, optional
-        Optional function with signature `callback(iteration, train_loss,
-        val_loss)` called each iteration.
+        Optional hook ``callback(iteration, train_loss, val_loss)``.
     seed : int, optional
-        Random seed for reproducibility of mini-batch selection.
+        Seed controlling minibatch shuffling.
     stop_using_val_loss : bool, default=False
-        Whether to use validation loss as the criterion for early stopping.
-        Requires `X_val` and `y_val`.
+        If ``True``, base early stopping on validation loss.
 
     Raises
     ------
     ValueError
-        If `stop_using_val_loss` is True but `X_val` or `y_val` is not provided.
-
-    Returns
-    -------
-    None
-        The model is updated in-place and left in evaluation mode.
+        If validation-based stopping is requested without validation data.
     """
     return fit_cpe_labels(
         model=model,
@@ -616,55 +766,45 @@ def fit_cpe_labels(
     seed: Optional[int] = None,
     stop_using_val_loss: bool = False,
 ):
-    """
-    Fit a Preference Class Probability Estimator using labels provided
+    """Fit a class-probability estimator using precomputed binary labels.
 
     Parameters
     ----------
     model : ClassProbabilityModel | PreferenceClassProbabilityModel
-        A neural network model or similar implementing the Preference CPE
-        interface.
-    X : torch.Tensor
-        Training input tensor of shape (N, D).
-    z : torch.Tensor
-        Label values for training inputs, of shape (N,).
-    U : torch.Tensor, optional
-        Training input preference tensor of shape (N, M).
-    X_val : torch.Tensor, optional
-        Optional validation input tensor of shape (N_val, D).
-    z_val : torch.Tensor, optional
-        Optional validation targets of shape (N_val,).
-    U_val : torch.Tensor, optional
-        Optional preference validation input tensor of shape (N_val, M).
+        Estimator to train in-place.
+    X : Tensor
+        Training inputs of shape ``(N, Dx)``.
+    z : Tensor
+        Binary labels aligned with ``X``.
+    U : Tensor, optional
+        Optional preferences of shape ``(N, Du)``.
+    X_val : Tensor, optional
+        Validation inputs.
+    z_val : Tensor, optional
+        Validation labels.
+    U_val : Tensor, optional
+        Validation preferences.
     batch_size : int, default=32
-        Batch size used for stochastic optimization.
+        Minibatch size.
     optimizer : torch.optim.Optimizer, default=torch.optim.AdamW
-        Optimizer class to use for training.
+        Optimizer class to instantiate.
     optimizer_options : dict, optional
-        Dictionary of keyword arguments passed to the optimizer.
+        Keyword arguments passed to the optimizer constructor.
     stop_options : dict, optional
-        Dictionary of keyword arguments passed to `ExpMAStoppingCriterion` for
-        early stopping.
+        Keyword arguments for ``SEPlateauStopping``.
     device : str, default="cpu"
-        Device to use for model training (e.g., "cpu" or "cuda").
+        Device on which to run training.
     callback : callable, optional
-        Optional function with signature `callback(iteration, train_loss,
-        val_loss)` called each iteration.
+        Optional hook ``callback(iteration, train_loss, val_loss)``.
     seed : int, optional
-        Random seed for reproducibility of mini-batch selection.
+        Seed controlling minibatch shuffling.
     stop_using_val_loss : bool, default=False
-        Whether to use validation loss as the criterion for early stopping.
-        Requires `X_val` and `z_val`.
+        If ``True``, base early stopping on validation loss.
 
     Raises
     ------
     ValueError
-        If `stop_using_val_loss` is True but `X_val` or `z_val` is not provided.
-
-    Returns
-    -------
-    None
-        The model is updated in-place and left in evaluation mode.
+        If validation-based stopping is requested without validation data.
     """
     if (X_val is None) and stop_using_val_loss:
         raise ValueError("Need to specify X_val to stop_using_xval_loss")
