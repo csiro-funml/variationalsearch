@@ -59,7 +59,7 @@ DHFR_DATA = {
         "from_prior": False,
         "samples": 1024,
         "optimisation": {"lr": 1e-3, "weight_decay": 0.0},
-        "stop": {"maxiter": 20000, "n_window": 5000},
+        "stop": {"maxiter": 40000, "miniter": 3000},
         "pex_options": dict(max_mutations=5),
         "adalead_options": dict(max_mutations=5, kappa_cutoff=0.5),
     },
@@ -67,9 +67,9 @@ DHFR_DATA = {
         "path": MODEL_PATH + "/DHFR_surrogate_nn.pt",
         "class": "NNClassProbability",
         "parameters": dict(hlsize=32, dropoutp=0.2, embedding_dim=8),
-        "batchsize": 512,
+        "batchsize": 32,
         "optimisation": {"lr": 1e-3},
-        "stop": {"maxiter": 20000, "n_window": 4000, "eta": 0.2},
+        "stop": {"maxiter": 20000},
     },
     "gp": {
         "path": MODEL_PATH + "/DHFR_surrogate_gp.pt",
@@ -130,7 +130,7 @@ TRPB_DATA = {
         "from_prior": False,
         "samples": 1024,
         "optimisation": {"lr": 1e-3, "weight_decay": 0.0},
-        "stop": {"maxiter": 20000, "n_window": 5000},
+        "stop": {"maxiter": 40000, "miniter": 3000},
         "pex_options": dict(max_mutations=5),
         "adalead_options": dict(max_mutations=5, kappa_cutoff=0.5),
     },
@@ -145,9 +145,9 @@ TRPB_DATA = {
         "path": MODEL_PATH + "/TRPB_surrogate_nn.pt",
         "class": "NNClassProbability",
         "parameters": dict(hlsize=32, dropoutp=0.2, embedding_dim=8),
-        "batchsize": 512,
+        "batchsize": 32,
         "optimisation": {"lr": 1e-3},
-        "stop": {"maxiter": 20000, "n_window": 4000, "eta": 0.2},
+        "stop": {"maxiter": 20000},
     },
 }
 
@@ -201,7 +201,7 @@ TFBIND8_DATA = {
         "from_prior": False,
         "samples": 1024,
         "optimisation": {"lr": 1e-3, "weight_decay": 0.0},
-        "stop": {"maxiter": 20000, "n_window": 5000},
+        "stop": {"maxiter": 40000, "miniter": 3000},
         "pex_options": dict(max_mutations=5),
         "adalead_options": dict(max_mutations=5, kappa_cutoff=0.5),
     },
@@ -216,9 +216,9 @@ TFBIND8_DATA = {
         "path": MODEL_PATH + "/TFBIND8_surrogate_nn.pt",
         "class": "NNClassProbability",
         "parameters": dict(hlsize=32, dropoutp=0.2, embedding_dim=8),
-        "batchsize": 512,
+        "batchsize": 32,
         "optimisation": {"lr": 1e-3},
-        "stop": {"maxiter": 20000, "n_window": 4000, "eta": 0.2},
+        "stop": {"maxiter": 20000},
     },
 }
 
@@ -266,11 +266,6 @@ GFP_DATA = {
         # "class": "SequenceUninformativePrior",
         # "parameters": {},
         # "trainable": False,
-        # --- VSD-I, VSD-TCNN and VSD-TAE methods
-        # "save_path": MODEL_PATH + "/GFP_prior.pt",
-        # "class": "MultiCategoricalProposal",
-        # "parameters": {},
-        # "trainable": True,
         # --- VSD-DTFM method
         "save_path": MODEL_PATH + "/GFP_prior_ar.pt",
         "class": "DTransformerProposal",
@@ -283,10 +278,11 @@ GFP_DATA = {
         # "class": "LSTMProposal",
         # "parameters": dict(hidden_size=32, num_layers=4, clip_gradients=1.0),
         # "trainable": True,
-        "batchsize": 512,
+        "batchsize": 32,
         "optimisation": {"lr": 1e-3, "weight_decay": 1e-4},
-        "stop": {"maxiter": 20000, "n_window": 1000},
+        "stop": {"maxiter": 40000},
         "use_threshold": False,
+        "oob_epochs": 10,
     },
     "proposal": {
         # --- VSD-IU and VSD-I methods
@@ -295,21 +291,6 @@ GFP_DATA = {
         # "optimisation": {"lr": 1e-3},
         # "from_prior": False, # For VSD-IU
         # "from_prior": True, # For VSD-I
-        # --- VSD-TCNN method
-        # "class": "TransitionCNNProposal",
-        # "parameters": dict(
-        #     latent_k=64,
-        #     kernel_size=7,
-        # ),
-        # "optimisation": {"lr": 1e-3},
-        # "from_prior": False,
-        # --- VSD-TAE method
-        # "class": "TransitionAEProposal",
-        # "parameters": dict(
-        #     embedding_dim=16,
-        # ),
-        # "optimisation": {"lr": 1e-3},
-        # "from_prior": False,
         # --- VSD-DTFM method
         "class": "DTransformerProposal",
         "parameters": dict(
@@ -323,7 +304,7 @@ GFP_DATA = {
         # "optimisation": {"lr": 1e-4},
         # "from_prior": True,
         "samples": 512,
-        "stop": {"maxiter": 40000, "n_window": 5000},
+        "stop": {"maxiter": 40000, "miniter": 3000},
         "pex_options": dict(max_mutations=10),
         "adalead_options": dict(max_mutations=10, kappa_cutoff=0.5),
     },
@@ -345,9 +326,9 @@ GFP_DATA = {
             linear_size=128,
             dropoutp=0.2,
         ),
-        "batchsize": 512,
+        "batchsize": 32,
         "optimisation": {"lr": 1e-3, "weight_decay": 0.0},
-        "stop": {"maxiter": 10000, "n_window": 4000, "eta": 0.2},
+        "stop": {"maxiter": 10000},
     },
 }
 
@@ -378,7 +359,7 @@ AAV_DATA = {
         # "class": "SequenceUninformativePrior",
         # "parameters": {},
         # "trainable": False,
-        # --- VSD-I, VSD-TAE and VSD-TCNN methods
+        # --- VSD-I
         # "save_path": MODEL_PATH + "/AAV_prior.pt",
         # "class": "MultiCategoricalProposal",
         # "parameters": {},
@@ -395,10 +376,23 @@ AAV_DATA = {
         # "class": "LSTMProposal",
         # "parameters": dict(hidden_size=32, num_layers=4, clip_gradients=1.0),
         # "trainable": True,
-        "batchsize": 512,
+        # --- VSD-mTFM
+        # "save_path": MODEL_PATH + "/AAV_prior_mtfm.pt",
+        # "class": "TransformerMutationProposal",
+        # "parameters": dict(
+        #     nhead=2,
+        #     num_layers=2,
+        #     dim_feedforward=64,
+        #     num_mutations=10,
+        # ),
+        # "trainable": True,
+        # "batchsize": 250,
+        ##
+        "batchsize": 32,
         "optimisation": {"lr": 1e-3, "weight_decay": 1e-4},
-        "stop": {"maxiter": 20000, "n_window": 1000},
+        "stop": {"maxiter": 20000},
         "use_threshold": False,
+        "oob_epochs": 10,
     },
     "proposal": {
         # --- VSD-I and VSD-IU methods
@@ -407,21 +401,6 @@ AAV_DATA = {
         # "optimisation": {"lr": 1e-3},
         # "from_prior": False,  # For VSD-IU
         # "from_prior": True,  # For VSD-I
-        # --- VSD-TCNN method
-        # "class": "TransitionCNNProposal",
-        # "parameters": dict(
-        #     latent_k=64,
-        #     kernel_size=7,
-        # ),
-        # "optimisation": {"lr": 1e-3},
-        # "from_prior": False,
-        # --- VSD-TAE method
-        # "class": "TransitionAEProposal",
-        # "parameters": dict(
-        #     embedding_dim=16,
-        # ),
-        # "optimisation": {"lr": 1e-3},
-        # "from_prior": False,
         # --- VSD-DTFM method
         "class": "DTransformerProposal",
         "parameters": dict(
@@ -434,8 +413,21 @@ AAV_DATA = {
         # "parameters": dict(hidden_size=32, num_layers=4, clip_gradients=1.0),
         # "optimisation": {"lr": 1e-4},
         # "from_prior": True,
+        # --- VSD-mTFM
+        # "class": "TransformerMutationProposal",
+        # "parameters": dict(
+        #     nhead=2,
+        #     num_layers=2,
+        #     dim_feedforward=64,
+        #     # clip_gradients=1.0,
+        #     num_mutations=10,
+        # ),
+        # "optimisation": {"lr": 1e-3, "weight_decay": 0.0},
+        # "from_prior": False,
+        # "samples": 10,
+        ##
         "samples": 512,
-        "stop": {"maxiter": 40000, "n_window": 5000},
+        "stop": {"maxiter": 40000, "miniter": 3000},
         "pex_options": dict(max_mutations=10),
         "adalead_options": dict(max_mutations=10, kappa_cutoff=0.5),
     },
@@ -457,8 +449,8 @@ AAV_DATA = {
             linear_size=128,
             dropoutp=0.2,
         ),
-        "batchsize": 500,
+        "batchsize": 32,
         "optimisation": {"lr": 1e-3},
-        "stop": {"maxiter": 10000, "n_window": 4000, "eta": 0.2},
+        "stop": {"maxiter": 10000},
     },
 }

@@ -1,16 +1,16 @@
-"""Surrogate model interfaces and estimators."""
+"""Gaussian process surrogate models and learning routines.
 
-from abc import ABC, abstractmethod
-from math import log, sqrt
+Compact GP models for sequence inputs and helpers to fit or update them.
+"""
+
 from typing import Any, Callable, Dict, Optional
-
 import torch
-import torch.nn as nn
+from math import log, sqrt
+from torch import Tensor
 from botorch.fit import fit_gpytorch_mll_scipy
 from botorch.models.gpytorch import GPyTorchModel
 from botorch.models.kernels import CategoricalKernel, InfiniteWidthBNNKernel
 from botorch.optim.core import OptimizationResult
-from botorch.optim.stopping import ExpMAStoppingCriterion
 from gpytorch.constraints import GreaterThan
 from gpytorch.distributions import MultivariateNormal
 from gpytorch.kernels import IndexKernel, Kernel, ScaleKernel
@@ -19,18 +19,27 @@ from gpytorch.means import ConstantMean
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from gpytorch.models import ExactGP
 from gpytorch.priors import LogNormalPrior
-from torch import Tensor
-from torch.optim import Optimizer
 
-from vsd.thresholds import Threshold
-from vsd.utils import PositionalEncoding, Transpose, batch_indices
 
 #
-# Gaussian process surrogates
+# GP Surrogates for sequences
 #
 
 
 class CategoricalGP(GPyTorchModel, ExactGP):
+    """GP with a categorical kernel for token sequences.
+
+    Parameters
+    ----------
+    seq_len : int
+        Sequence length.
+    alpha_len : int
+        Alphabet size.
+    X, y : Tensor
+        Training data.
+    ard : bool, default=False
+        If True, use per-position lengthscales.
+    """
 
     num_outputs = 1
 
@@ -63,6 +72,17 @@ class CategoricalGP(GPyTorchModel, ExactGP):
 
 
 class IndexGP(GPyTorchModel, ExactGP):
+    """GP with an index kernel over alphabet indices.
+
+    Parameters
+    ----------
+    seq_len, alpha_len : int
+        Sequence length and alphabet size.
+    X, y : Tensor
+        Training data.
+    rank : int, optional
+        Rank for the index kernel embedding.
+    """
 
     num_outputs = 1
 
@@ -95,6 +115,19 @@ class IndexGP(GPyTorchModel, ExactGP):
 
 
 class IBNN(GPyTorchModel, ExactGP):
+    """Infinite-width BNN kernel GP for sequences.
+
+    Parameters
+    ----------
+    seq_len : int
+        Sequence length.
+    alpha_len : int
+        Alphabet size.
+    X, y : Tensor
+        Training data.
+    depth : int, optional
+        Depth parameter of the InfiniteWidthBNNKernel.
+    """
 
     num_outputs = 1
 
@@ -125,6 +158,7 @@ class IBNN(GPyTorchModel, ExactGP):
 
 
 def _onehot_kernel(kernelclass: Kernel, num_classes: int) -> Kernel:
+    """Wrap a kernel to operate on integer-encoded categorical sequences."""
 
     class _CategoricalInputs(kernelclass):
 
@@ -138,150 +172,6 @@ def _onehot_kernel(kernelclass: Kernel, num_classes: int) -> Kernel:
 
 
 #
-# Class probability estimators
-#
-
-
-class ClassProbabilityModel(ABC, nn.Module):
-
-    @abstractmethod
-    def _logits(self, X: Tensor) -> Tensor:
-        pass
-
-    def forward(self, X: Tensor, return_logits: bool = False) -> Tensor:
-        logits = squeeze_1D(self._logits(X))
-        if return_logits:
-            return logits
-        return nn.functional.logsigmoid(logits)
-
-
-class EnsembleProbabilityModel(ClassProbabilityModel):
-
-    def __init__(
-        self,
-        base_class: ClassProbabilityModel,
-        init_kwargs: dict,
-        ensemble_size: int = 10,
-    ):
-        super().__init__()
-        self.base_class = ClassProbabilityModel
-        self.init_kwargs = init_kwargs
-        self.ensemble_size = ensemble_size
-        self.ensemble = torch.nn.ModuleList(
-            [base_class(**init_kwargs) for _ in range(ensemble_size)]
-        )
-
-    def _logits(self, X: Tensor) -> Tensor:
-        logits = [torch.sigmoid(m._logits(X)) for m in self.ensemble]
-        probs = torch.mean(torch.stack(logits), dim=0)
-        return torch.logit(probs, eps=1e-5)
-
-
-class ContinuousCPEModel(ClassProbabilityModel):
-
-    def __init__(self, x_dim: int, latent_dim: int, dropoutp: float = 0):
-        super().__init__()
-        self.nn = torch.nn.Sequential(
-            nn.Linear(in_features=x_dim, out_features=latent_dim),
-            nn.Dropout(p=dropoutp),
-            nn.LeakyReLU(),
-            nn.Linear(in_features=latent_dim, out_features=1),
-        )
-
-    def _logits(self, X: Tensor) -> Tensor:
-        return self.nn(X)
-
-
-class SequenceProbabilityModel(ClassProbabilityModel):
-
-    def __init__(self, seq_len, alpha_len) -> None:
-        super().__init__()
-        self.seq_len = seq_len
-        self.alpha_len = alpha_len
-
-
-class NNClassProbability(SequenceProbabilityModel):
-
-    def __init__(
-        self,
-        seq_len,
-        alpha_len,
-        embedding_dim: Optional[int] = None,
-        dropoutp: float = 0,
-        hlsize: int = 64,
-    ) -> None:
-        super().__init__(seq_len, alpha_len)
-        if embedding_dim is None:
-            embedding_dim = max(2, self.alpha_len // 2)
-        self.nn = torch.nn.Sequential(
-            nn.Embedding(num_embeddings=alpha_len, embedding_dim=embedding_dim),
-            nn.Dropout(p=dropoutp),
-            nn.Flatten(),
-            nn.LeakyReLU(),
-            nn.Linear(in_features=embedding_dim * seq_len, out_features=hlsize),
-            nn.LeakyReLU(),
-            nn.Linear(in_features=hlsize, out_features=1),
-        )
-
-    def _logits(self, X: Tensor) -> Tensor:
-        return self.nn(X)
-
-
-class CNNClassProbability(SequenceProbabilityModel):
-
-    def __init__(
-        self,
-        seq_len,
-        alpha_len,
-        embedding_dim: Optional[int] = None,
-        ckernel: int = 7,
-        xkernel: int = 2,
-        xstride: int = 2,
-        cfilter_size: int = 16,
-        linear_size: int = 128,
-        dropoutp: float = 0,
-        pos_encoding: bool = False,
-    ) -> None:
-        super().__init__(seq_len, alpha_len)
-        if embedding_dim is None:
-            embedding_dim = max(2, self.alpha_len // 2)
-        self.seq_len = seq_len
-        self.alpha_len = alpha_len
-        emb = [
-            nn.Embedding(num_embeddings=alpha_len, embedding_dim=embedding_dim)
-        ]
-        if pos_encoding:
-            emb.append(PositionalEncoding(emb_size=embedding_dim))
-        self.nn = torch.nn.Sequential(
-            *emb,
-            nn.Dropout(p=dropoutp),
-            Transpose(),
-            nn.Conv1d(
-                in_channels=embedding_dim,
-                out_channels=cfilter_size,
-                kernel_size=ckernel,
-            ),
-            nn.LeakyReLU(),
-            nn.MaxPool1d(kernel_size=xkernel, stride=xstride),
-            nn.Conv1d(
-                in_channels=cfilter_size,
-                out_channels=cfilter_size,
-                kernel_size=ckernel,
-            ),
-            nn.LeakyReLU(),
-            nn.MaxPool1d(kernel_size=xkernel, stride=xstride),
-            Transpose(),
-            nn.Flatten(),
-            nn.LazyLinear(out_features=linear_size),
-            nn.LeakyReLU(),
-            nn.Linear(in_features=linear_size, out_features=1),
-        )
-
-    def _logits(self, X: Tensor) -> Tensor:
-        return self.nn(X)
-
-
-#
 #   Model fitting and updating
 #
 
@@ -289,12 +179,23 @@ class CNNClassProbability(SequenceProbabilityModel):
 def fit_gp(
     model: GPyTorchModel,
     optimiser_options: Optional[Dict[str, Any]] = None,
-    stop_options: Optional[Dict[str, Any]] = None,
     device: str = "cpu",
     callback: Optional[Callable[[Tensor, OptimizationResult], None]] = None,
 ):
+    """Fit a GP by maximising the exact marginal log-likelihood via SciPy.
+
+    Parameters
+    ----------
+    model : GPyTorchModel
+        GP model (with likelihood) to train in-place.
+    optimiser_options : dict, optional
+        Keyword arguments forwarded to ``fit_gpytorch_mll_scipy``.
+    device : str, default="cpu"
+        Device on which to perform optimisation.
+    callback : callable, optional
+        Optional hook passed to the optimiser.
+    """
     optimiser_options = {} if optimiser_options is None else optimiser_options
-    stop_options = {} if stop_options is None else stop_options
 
     model.to(device)
     model.train()
@@ -312,9 +213,26 @@ def update_gp(
     device: str = "cpu",
     refit: bool = False,
     optimizer_options: Optional[Dict[str, Any]] = None,
-    stop_options: Optional[Dict[str, Any]] = None,
     callback: Optional[Callable[[Tensor, OptimizationResult], None]] = None,
 ):
+    """Update training data for a fitted GP and optionally refit hyperparams.
+
+    Parameters
+    ----------
+    model : GPyTorchModel
+        GP surrogate previously fitted.
+    X, y : Tensor
+        New training inputs and targets.
+    device : str, default="cpu"
+        Device on which to update data/refit.
+    refit : bool, default=False
+        If ``True`` re-optimise hyperparameters after updating the dataset.
+    optimizer_options : dict, optional
+        Keyword arguments passed through to ``fit_gp`` when ``refit`` is
+        ``True``.
+    callback : callable, optional
+        Optional hook forwarded to ``fit_gp``.
+    """
     model.set_train_data(
         inputs=X.to(device), targets=y.to(device), strict=False
     )
@@ -322,76 +240,6 @@ def update_gp(
         fit_gp(
             model=model,
             optimiser_options=optimizer_options,
-            stop_options=stop_options,
             device=device,
             callback=callback,
         )
-
-
-def fit_cpe(
-    model: ClassProbabilityModel,
-    X: Tensor,
-    y: Tensor,
-    best_f: float | Threshold,
-    X_val: Optional[Tensor] = None,
-    y_val: Optional[Tensor] = None,
-    batch_size: int = 256,
-    optimizer: Optimizer = torch.optim.AdamW,
-    optimizer_options: Optional[Dict[str, Any]] = None,
-    stop_options: Optional[Dict[str, Any]] = None,
-    device: str = "cpu",
-    callback: Optional[Callable[[int, Tensor], None]] = None,
-    seed: Optional[int] = None,
-    stop_using_val_loss: bool = False,
-):
-    """TODO"""
-    if (X_val is None) and stop_using_val_loss:
-        raise ValueError("Need to specify X_val to stop_using_xval_loss")
-
-    model.to(device)
-    optimizer_options = {} if optimizer_options is None else optimizer_options
-    stop_options = {} if stop_options is None else stop_options
-    optim = optimizer(model.parameters(), **optimizer_options)
-    lossfn = torch.nn.BCEWithLogitsLoss()
-    stopping_criterion = ExpMAStoppingCriterion(**stop_options)  # type: ignore
-
-    z = _get_labels(y, best_f)
-    if X_val is None:
-        vloss = torch.zeros([])
-    else:
-        X_val = X_val.to(device)
-        z_val = _get_labels(y_val, best_f).to(device)
-
-    model.train()
-    for i, bi in enumerate(batch_indices(len(z), batch_size, seed)):
-        Xb = torch.atleast_2d(X[bi].to(device))
-        zb = z[bi].to(device)
-        loss = lossfn(model(Xb, return_logits=True), zb)
-        loss.backward()
-        optim.step()
-        optim.zero_grad()
-
-        sloss = loss.detach()
-        if X_val is not None:
-            model.eval()
-            with torch.no_grad():
-                vloss = lossfn(model(X_val, return_logits=True), z_val).detach()
-            if stop_using_val_loss:
-                sloss = vloss
-            model.train()
-
-        if callback is not None:
-            callback(i, loss, vloss)
-        if stopping_criterion.evaluate(fvals=sloss):
-            break
-    model.eval()
-
-
-def _get_labels(y: Tensor, best_f: float | Threshold) -> Tensor:
-    if isinstance(best_f, Threshold):
-        return best_f.labels(y).float()
-    return (y >= best_f).float()
-
-
-def squeeze_1D(x: Tensor) -> Tensor:
-    return torch.atleast_1d(x.squeeze())
